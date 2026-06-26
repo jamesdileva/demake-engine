@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DEMAKE ENGINE — Sprint 0</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0500;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: 'Courier New', monospace;
+  }
+  #header {
+    color: #ff4400;
+    font-size: 11px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+    opacity: 0.7;
+  }
+  #game-container {
+    border: 2px solid #3d1a00;
+    box-shadow: 0 0 40px #ff220044, 0 0 80px #ff110011;
+    image-rendering: pixelated;
+  }
+  #footer {
+    color: #3d1a00;
+    font-size: 10px;
+    letter-spacing: 2px;
+    margin-top: 8px;
+  }
+</style>
+</head>
+<body>
+
+<div id="header">◆ DEMAKE ENGINE v0.1 — WAVE SHOOTER TEMPLATE ◆</div>
+<div id="game-container"></div>
+<div id="footer">WASD / ARROWS — MOVE &nbsp;|&nbsp; MOUSE — AIM &amp; SHOOT &nbsp;|&nbsp; R — RELOAD &nbsp;|&nbsp; SPRINT 0 BUILD</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.60.0/phaser.min.js"></script>
+<script>
+// ============================================================
+// MANIFEST — In Sprint 4 this is fetched from /api/v1/demake/{id}/manifest
+// For Sprint 0 it's hardcoded here to prove the engine works
+// ============================================================
+const MANIFEST = {
+  demake_id: "test-001",
+  title: "ZOMBIE BUNKER",
+  template: "wave_shooter",
+  palette: {
+    primary:    0x1a0a00,
+    secondary:  0x3d2b1f,
+    accent:     0x8b1a00,
+    highlight:  0xff4400,
+    background: 0x0d0500,
+    floor:      0x1a0e06,
+    wall:       0x0f0804,
+    hud_text:   "#ff4400",
+    hud_bg:     "#000000",
+    hud_dim:    "#662200"
+  },
+  game_config: {
+    physics:  { gravity: 0, player_speed: 130, bullet_speed: 380 },
+    waves:    { start_count: 6, multiplier: 1.4, boss_every: 5, spawn_delay_ms: 700 },
+    player:   { max_hp: 100, max_ammo: 30, reload_time_ms: 1800, fire_rate_ms: 150 },
+    enemy:    { base_hp: 30, base_speed: 55, damage: 10, hp_scale: 1.2, speed_scale: 1.05 },
+    boss:     { hp_mult: 8, speed_mult: 0.6, damage_mult: 3, size_mult: 2.0 }
+  }
+};
+
+const W = 480, H = 320;
+const TILE = 16;
+
+// ============================================================
+// PROCEDURAL PIXEL ART — drawn to canvas, used as textures
+// Sprint 3 will replace these with SD-generated spritesheets
+// ============================================================
+function generateTextures(scene) {
+  const p = MANIFEST.palette;
+
+  // Floor tile — concrete grate pattern
+  const floorGfx = scene.make.graphics({ x: 0, y: 0, add: false });
+  floorGfx.fillStyle(p.floor);
+  floorGfx.fillRect(0, 0, TILE, TILE);
+  floorGfx.lineStyle(1, 0x0a0604, 0.8);
+  floorGfx.strokeRect(0, 0, TILE, TILE);
+  floorGfx.fillStyle(0x140a04, 0.5);
+  floorGfx.fillRect(1, 1, 6, 6);
+  floorGfx.fillRect(9, 9, 6, 6);
+  floorGfx.generateTexture('tile_floor', TILE, TILE);
+  floorGfx.destroy();
+
+  // Wall tile — brick pattern
+  const wallGfx = scene.make.graphics({ x: 0, y: 0, add: false });
+  wallGfx.fillStyle(p.wall);
+  wallGfx.fillRect(0, 0, TILE, TILE);
+  wallGfx.lineStyle(1, 0x050302, 1);
+  wallGfx.strokeRect(0, 0, TILE, TILE);
+  // Brick lines
+  wallGfx.fillStyle(0x080503, 1);
+  wallGfx.fillRect(0, 7, TILE, 2);
+  wallGfx.fillRect(8, 0, 2, 7);
+  wallGfx.fillRect(4, 9, 2, 7);
+  wallGfx.generateTexture('tile_wall', TILE, TILE);
+  wallGfx.destroy();
+
+  // Player — 8px soldier silhouette, 16x16
+  // Spritesheet: 8 frames × 16px = 128px wide
+  // frames 0-1: idle, 2-5: walk, 6-7: shoot
+  const FRAMES = 8;
+  const playerGfx = scene.make.graphics({ x: 0, y: 0, add: false });
+  for (let f = 0; f < FRAMES; f++) {
+    const ox = f * TILE;
+    const bob = (f >= 2 && f <= 5) ? (f % 2 === 0 ? 0 : 1) : 0;  // walk bob
+    const isShooting = f >= 6;
+
+    // Body
+    playerGfx.fillStyle(0x4a6b3a); // military green
+    playerGfx.fillRect(ox + 4, 6 + bob, 8, 7);
+    // Head + helmet
+    playerGfx.fillStyle(0x3a5a2a);
+    playerGfx.fillRect(ox + 5, 2 + bob, 6, 5);
+    // Visor
+    playerGfx.fillStyle(0x88ccff);
+    playerGfx.fillRect(ox + 6, 4 + bob, 4, 2);
+    // Legs
+    playerGfx.fillStyle(0x2a3a20);
+    playerGfx.fillRect(ox + 4, 13 + bob, 3, 3);
+    playerGfx.fillRect(ox + 8, 13 + bob, 3, 3);
+    // Gun (extended when shooting)
+    playerGfx.fillStyle(0x222222);
+    if (isShooting) {
+      playerGfx.fillRect(ox + 10, 7 + bob, 5, 2);
+    } else {
+      playerGfx.fillRect(ox + 10, 8 + bob, 4, 2);
+    }
+  }
+  playerGfx.generateTexture('player', TILE * FRAMES, TILE);
+  playerGfx.destroy();
+  // Register frames so generateFrameNumbers works
+  const playerTex = scene.textures.get('player');
+  for (let i = 0; i < FRAMES; i++) {
+    playerTex.add(i, 0, i * TILE, 0, TILE, TILE);
+  }
+
+  // Enemy — 16x16 zombie, 4 frames walk cycle
+  const enemyGfx = scene.make.graphics({ x: 0, y: 0, add: false });
+  for (let f = 0; f < 4; f++) {
+    const ox = f * TILE;
+    const lurch = f % 2 === 0 ? 0 : 1;
+    // Body — rotting green
+    enemyGfx.fillStyle(0x4a6b2a);
+    enemyGfx.fillRect(ox + 4, 7 + lurch, 8, 6);
+    // Head
+    enemyGfx.fillStyle(0x6a8a3a);
+    enemyGfx.fillRect(ox + 5, 2 + lurch, 6, 6);
+    // Red eyes
+    enemyGfx.fillStyle(0xff0000);
+    enemyGfx.fillRect(ox + 6, 4 + lurch, 2, 2);
+    enemyGfx.fillRect(ox + 9, 4 + lurch, 2, 2);
+    // Arms — outstretched
+    const armReach = f % 2 === 0 ? 2 : 3;
+    enemyGfx.fillStyle(0x4a6b2a);
+    enemyGfx.fillRect(ox + 1, 8 + lurch, armReach, 2);
+    enemyGfx.fillRect(ox + 13, 8 + lurch, armReach, 2);
+    // Legs
+    enemyGfx.fillStyle(0x2a4a1a);
+    enemyGfx.fillRect(ox + 4, 13 + lurch, 3, 3);
+    enemyGfx.fillRect(ox + 8, 13 - lurch, 3, 3);
+  }
+  enemyGfx.generateTexture('enemy', TILE * 4, TILE);
+  enemyGfx.destroy();
+  const enemyTex = scene.textures.get('enemy');
+  for (let i = 0; i < 4; i++) {
+    enemyTex.add(i, 0, i * TILE, 0, TILE, TILE);
+  }
+
+  // Boss — 32x32, 2 frames, drawn at double tile size
+  const BOSS_SIZE = 32;
+  const bossGfx = scene.make.graphics({ x: 0, y: 0, add: false });
+  for (let f = 0; f < 2; f++) {
+    const ox = f * BOSS_SIZE;
+    const sway = f === 0 ? 0 : 2;
+    // Huge body
+    bossGfx.fillStyle(0x2a4a1a);
+    bossGfx.fillRect(ox + 6, 12 + sway, 20, 16);
+    // Head — massive
+    bossGfx.fillStyle(0x3a5a1a);
+    bossGfx.fillRect(ox + 4, 2 + sway, 24, 12);
+    // Glowing eyes
+    bossGfx.fillStyle(0xff6600);
+    bossGfx.fillRect(ox + 7, 6 + sway, 5, 4);
+    bossGfx.fillRect(ox + 20, 6 + sway, 5, 4);
+    // Chains
+    bossGfx.fillStyle(0x888888);
+    bossGfx.fillRect(ox + 8, 14 + sway, 2, 8);
+    bossGfx.fillRect(ox + 22, 14 + sway, 2, 8);
+    // Giant fists
+    bossGfx.fillStyle(0x2a3a10);
+    bossGfx.fillRect(ox + 0, 16 + sway, 6, 8);
+    bossGfx.fillRect(ox + 26, 16 + sway, 6, 8);
+    // Legs
+    bossGfx.fillRect(ox + 8, 26 + sway, 6, 6);
+    bossGfx.fillRect(ox + 18, 26 - sway, 6, 6);
+  }
+  bossGfx.generateTexture('boss', BOSS_SIZE * 2, BOSS_SIZE);
+  bossGfx.destroy();
+  const bossTex = scene.textures.get('boss');
+  for (let i = 0; i < 2; i++) {
+    bossTex.add(i, 0, i * BOSS_SIZE, 0, BOSS_SIZE, BOSS_SIZE);
+  }
+
+  // Bullet — tiny bright pixel
+  const bulletGfx = scene.make.graphics({ x: 0, y: 0, add: false });
+  bulletGfx.fillStyle(0xffcc00);
+  bulletGfx.fillRect(0, 1, 6, 2);
+  bulletGfx.fillStyle(0xffffff);
+  bulletGfx.fillRect(0, 1, 2, 2);
+  bulletGfx.generateTexture('bullet', 6, 4);
+  bulletGfx.destroy();
+
+  // Blood splat particle
+  const bloodGfx = scene.make.graphics({ x: 0, y: 0, add: false });
+  bloodGfx.fillStyle(0xaa0000);
+  bloodGfx.fillRect(0, 0, 4, 4);
+  bloodGfx.generateTexture('blood', 4, 4);
+  bloodGfx.destroy();
+
+  // Muzzle flash
+  const flashGfx = scene.make.graphics({ x: 0, y: 0, add: false });
+  flashGfx.fillStyle(0xffff00);
+  flashGfx.fillRect(0, 0, 6, 6);
+  flashGfx.fillStyle(0xffffff);
+  flashGfx.fillRect(2, 2, 2, 2);
+  flashGfx.generateTexture('flash', 6, 6);
+  flashGfx.destroy();
+}
+
+// ============================================================
+// PRELOAD SCENE
+// ============================================================
+class PreloadScene extends Phaser.Scene {
+  constructor() { super('PreloadScene'); }
+
+  preload() {
+    // Fonts and external assets would load here in Sprint 3
+    // For now everything is generated procedurally
+  }
+
+  create() {
+    generateTextures(this);
+    this.scene.start('GameScene');
+  }
+}
+
+// ============================================================
+// GAME SCENE — Wave Shooter Template
+// ============================================================
+class GameScene extends Phaser.Scene {
+  constructor() { super('GameScene'); }
+
+  create() {
+    const cfg = MANIFEST.game_config;
+    const p   = MANIFEST.palette;
+
+    // ── State ──────────────────────────────────────────────
+    this.waveNum    = 1;
+    this.score      = 0;
+    this.isReloading = false;
+    this.lastFired  = 0;
+    this.reloadTimer = null;
+    this.waveActive = false;
+    this.enemiesLeft = 0;
+    this.bossAlive  = false;
+    this.gameOver   = false;
+    this.ammo       = cfg.player.max_ammo;
+    this.hp         = cfg.player.max_hp;
+
+    // ── World ──────────────────────────────────────────────
+    this.buildRoom();
+
+    // ── Groups ─────────────────────────────────────────────
+    this.bullets  = this.physics.add.group();
+    this.enemies  = this.physics.add.group();
+    this.particles = this.add.group();
+
+    // ── Player ─────────────────────────────────────────────
+    this.player = this.physics.add.sprite(W / 2, H / 2, 'player');
+    this.player.setCollideWorldBounds(true);
+    this.player.body.setSize(10, 10);
+    this.player.setDepth(10);
+
+    // Player animations
+    this.anims.create({
+      key: 'player_idle', frames: this.anims.generateFrameNumbers('player', { start: 0, end: 1 }),
+      frameRate: 4, repeat: -1
+    });
+    this.anims.create({
+      key: 'player_walk', frames: this.anims.generateFrameNumbers('player', { start: 2, end: 5 }),
+      frameRate: 8, repeat: -1
+    });
+    this.anims.create({
+      key: 'player_shoot', frames: this.anims.generateFrameNumbers('player', { start: 6, end: 7 }),
+      frameRate: 12, repeat: 0
+    });
+    this.anims.create({
+      key: 'enemy_walk', frames: this.anims.generateFrameNumbers('enemy', { start: 0, end: 3 }),
+      frameRate: 6, repeat: -1
+    });
+    this.anims.create({
+      key: 'boss_idle', frames: this.anims.generateFrameNumbers('boss', { start: 0, end: 1 }),
+      frameRate: 3, repeat: -1
+    });
+
+    this.player.play('player_idle');
+
+    // ── Wall collision ──────────────────────────────────────
+    this.physics.add.collider(this.player, this.walls);
+
+    // ── Input ──────────────────────────────────────────────
+    this.keys = this.input.keyboard.addKeys({
+      up:     Phaser.Input.Keyboard.KeyCodes.W,
+      down:   Phaser.Input.Keyboard.KeyCodes.S,
+      left:   Phaser.Input.Keyboard.KeyCodes.A,
+      right:  Phaser.Input.Keyboard.KeyCodes.D,
+      up2:    Phaser.Input.Keyboard.KeyCodes.UP,
+      down2:  Phaser.Input.Keyboard.KeyCodes.DOWN,
+      left2:  Phaser.Input.Keyboard.KeyCodes.LEFT,
+      right2: Phaser.Input.Keyboard.KeyCodes.RIGHT,
+      reload: Phaser.Input.Keyboard.KeyCodes.R
+    });
+
+    this.input.on('pointerdown', (ptr) => {
+      if (!this.gameOver) this.tryShoot(ptr.worldX, ptr.worldY);
+    });
+
+    // ── Collisions ─────────────────────────────────────────
+    this.physics.add.overlap(this.bullets, this.enemies, this.hitEnemy, null, this);
+    this.physics.add.overlap(this.player,  this.enemies, this.enemyTouchPlayer, null, this);
+
+    // ── HUD Scene ──────────────────────────────────────────
+    this.scene.launch('HUDScene', { gameScene: this });
+
+    // ── Kick off first wave ─────────────────────────────────
+    this.time.delayedCall(1200, () => this.startWave());
+  }
+
+  // ── WORLD BUILDER ──────────────────────────────────────────
+  buildRoom() {
+    const cols = Math.ceil(W / TILE);
+    const rows = Math.ceil(H / TILE);
+
+    // Floor
+    for (let x = 0; x < cols; x++) {
+      for (let y = 0; y < rows; y++) {
+        this.add.image(x * TILE + TILE / 2, y * TILE + TILE / 2, 'tile_floor').setDepth(0);
+      }
+    }
+
+    // Walls group
+    this.walls = this.physics.add.staticGroup();
+
+    // Border walls
+    for (let x = 0; x < cols; x++) {
+      this.walls.create(x * TILE + TILE / 2, TILE / 2,          'tile_wall').setDepth(1).refreshBody();
+      this.walls.create(x * TILE + TILE / 2, H - TILE / 2,      'tile_wall').setDepth(1).refreshBody();
+    }
+    for (let y = 1; y < rows - 1; y++) {
+      this.walls.create(TILE / 2,         y * TILE + TILE / 2,  'tile_wall').setDepth(1).refreshBody();
+      this.walls.create(W - TILE / 2,     y * TILE + TILE / 2,  'tile_wall').setDepth(1).refreshBody();
+    }
+
+    // Interior cover objects (4 pillars)
+    const pillars = [
+      [5, 4], [5, 13], [24, 4], [24, 13]
+    ];
+    pillars.forEach(([cx, cy]) => {
+      for (let dx = 0; dx < 2; dx++) {
+        for (let dy = 0; dy < 2; dy++) {
+          this.walls.create(
+            (cx + dx) * TILE + TILE / 2,
+            (cy + dy) * TILE + TILE / 2,
+            'tile_wall'
+          ).setDepth(2).refreshBody();
+        }
+      }
+    });
+  }
+
+  // ── WAVE SYSTEM ────────────────────────────────────────────
+  startWave() {
+    const cfg = MANIFEST.game_config;
+    const isBossWave = this.waveNum % cfg.waves.boss_every === 0;
+    const count = Math.floor(cfg.waves.start_count * Math.pow(cfg.waves.multiplier, this.waveNum - 1));
+
+    this.waveActive  = true;
+    this.enemiesLeft = isBossWave ? count + 1 : count;
+
+    // Notify HUD
+    this.events.emit('waveStart', this.waveNum, isBossWave);
+
+    // Spawn enemies in waves
+    let spawned = 0;
+    const spawnLoop = this.time.addEvent({
+      delay: cfg.waves.spawn_delay_ms,
+      repeat: count - 1,
+      callback: () => {
+        this.spawnEnemy(false);
+        spawned++;
+        if (spawned === count && isBossWave) {
+          this.time.delayedCall(1500, () => this.spawnEnemy(true));
+        }
+      }
+    });
+  }
+
+  spawnEnemy(isBoss) {
+    const cfg = MANIFEST.game_config;
+    const waveScale = this.waveNum;
+
+    // Pick random edge spawn point
+    const edges = [
+      { x: Phaser.Math.Between(TILE * 2, W - TILE * 2), y: TILE * 2 },
+      { x: Phaser.Math.Between(TILE * 2, W - TILE * 2), y: H - TILE * 2 },
+      { x: TILE * 2,     y: Phaser.Math.Between(TILE * 2, H - TILE * 2) },
+      { x: W - TILE * 2, y: Phaser.Math.Between(TILE * 2, H - TILE * 2) }
+    ];
+    const spawn = Phaser.Utils.Array.GetRandom(edges);
+
+    let enemy;
+    if (isBoss) {
+      enemy = this.enemies.create(spawn.x, spawn.y, 'boss');
+      enemy.setFrame(0);
+      enemy.setScale(1);
+      enemy.isBoss = true;
+      enemy.hp = Math.floor(cfg.enemy.base_hp * cfg.boss.hp_mult * Math.pow(cfg.enemy.hp_scale, waveScale));
+      enemy.maxHp = enemy.hp;
+      enemy.speed = cfg.enemy.base_speed * cfg.boss.speed_mult;
+      enemy.damage = cfg.enemy.damage * cfg.boss.damage_mult;
+      enemy.body.setSize(28, 28);
+      if (this.anims.exists('boss_idle')) enemy.play('boss_idle');
+      this.bossAlive = true;
+      this.cameras.main.shake(300, 0.01);
+    } else {
+      enemy = this.enemies.create(spawn.x, spawn.y, 'enemy');
+      enemy.setFrame(0);
+      enemy.isBoss = false;
+      enemy.hp = Math.floor(cfg.enemy.base_hp * Math.pow(cfg.enemy.hp_scale, waveScale - 1));
+      enemy.maxHp = enemy.hp;
+      enemy.speed = cfg.enemy.base_speed * Math.pow(cfg.enemy.speed_scale, waveScale - 1);
+      enemy.damage = cfg.enemy.damage;
+      enemy.body.setSize(12, 12);
+      if (this.anims.exists('enemy_walk')) enemy.play('enemy_walk');
+    }
+
+    enemy.setDepth(5);
+    enemy.lastDamageTime = 0;
+    return enemy;
+  }
+
+  // ── COMBAT ─────────────────────────────────────────────────
+  tryShoot(targetX, targetY) {
+    const cfg = MANIFEST.game_config;
+    const now = this.time.now;
+
+    if (this.isReloading) return;
+    if (this.ammo <= 0) { this.startReload(); return; }
+    if (now - this.lastFired < cfg.player.fire_rate_ms) return;
+
+    this.lastFired = now;
+    this.ammo--;
+    this.events.emit('ammoChanged', this.ammo);
+
+    const px = this.player.x;
+    const py = this.player.y;
+    const angle = Phaser.Math.Angle.Between(px, py, targetX, targetY);
+
+    const bullet = this.bullets.create(px, py, 'bullet');
+    bullet.setDepth(8);
+    bullet.setRotation(angle);
+    this.physics.velocityFromAngle(
+      Phaser.Math.RadToDeg(angle),
+      cfg.physics.bullet_speed,
+      bullet.body.velocity
+    );
+    bullet.body.setAllowGravity(false);
+
+    // Muzzle flash
+    const flash = this.add.image(
+      px + Math.cos(angle) * 14,
+      py + Math.sin(angle) * 14,
+      'flash'
+    ).setDepth(12);
+    this.time.delayedCall(60, () => flash.destroy());
+
+    // Auto-reload on empty
+    if (this.ammo === 0) {
+      this.time.delayedCall(200, () => this.startReload());
+    }
+
+    // Play shoot anim briefly
+    if (this.anims.exists('player_shoot')) this.player.play('player_shoot', true);
+    this.time.delayedCall(200, () => {
+      if (!this.gameOver && this.anims.exists('player_idle')) this.player.play('player_idle', true);
+    });
+  }
+
+  startReload() {
+    if (this.isReloading) return;
+    this.isReloading = true;
+    this.events.emit('reloadStart');
+
+    this.time.delayedCall(MANIFEST.game_config.player.reload_time_ms, () => {
+      this.ammo = MANIFEST.game_config.player.max_ammo;
+      this.isReloading = false;
+      this.events.emit('reloadEnd');
+      this.events.emit('ammoChanged', this.ammo);
+    });
+  }
+
+  hitEnemy(bullet, enemy) {
+    bullet.destroy();
+    enemy.hp -= 25;
+
+    // Blood particle
+    for (let i = 0; i < 4; i++) {
+      const bp = this.add.image(
+        enemy.x + Phaser.Math.Between(-4, 4),
+        enemy.y + Phaser.Math.Between(-4, 4),
+        'blood'
+      ).setDepth(6).setAlpha(0.9);
+      this.time.delayedCall(300 + i * 50, () => bp.destroy());
+    }
+
+    // Flash red
+    enemy.setTint(0xff0000);
+    this.time.delayedCall(80, () => enemy.clearTint());
+
+    if (enemy.hp <= 0) {
+      this.killEnemy(enemy);
+    }
+  }
+
+  killEnemy(enemy) {
+    const pts = enemy.isBoss ? 500 : 50;
+    this.score += pts;
+    this.events.emit('scoreChanged', this.score);
+
+    if (enemy.isBoss) this.bossAlive = false;
+
+    enemy.destroy();
+    this.enemiesLeft--;
+
+    if (this.enemiesLeft <= 0) {
+      this.waveActive = false;
+      this.waveNum++;
+      this.events.emit('waveEnd', this.waveNum - 1);
+      this.time.delayedCall(2500, () => {
+        if (!this.gameOver) this.startWave();
+      });
+    }
+  }
+
+  enemyTouchPlayer(player, enemy) {
+    const now = this.time.now;
+    if (now - enemy.lastDamageTime < 600) return;
+    enemy.lastDamageTime = now;
+
+    this.hp -= enemy.damage;
+    this.events.emit('hpChanged', this.hp);
+    this.cameras.main.shake(80, 0.008);
+
+    // Player flash red
+    player.setTint(0xff0000);
+    this.time.delayedCall(100, () => player.clearTint());
+
+    if (this.hp <= 0) this.triggerGameOver();
+  }
+
+  triggerGameOver() {
+    this.gameOver = true;
+    this.physics.pause();
+    this.player.setTint(0xff0000);
+    this.events.emit('gameOver', this.score, this.waveNum);
+  }
+
+  // ── UPDATE LOOP ────────────────────────────────────────────
+  update(time, delta) {
+    if (this.gameOver) return;
+
+    const cfg = MANIFEST.game_config;
+    const k   = this.keys;
+    const spd = cfg.physics.player_speed;
+
+    // ── Player movement ──
+    let vx = 0, vy = 0;
+    if (k.left.isDown  || k.left2.isDown)  vx = -spd;
+    if (k.right.isDown || k.right2.isDown) vx =  spd;
+    if (k.up.isDown    || k.up2.isDown)    vy = -spd;
+    if (k.down.isDown  || k.down2.isDown)  vy =  spd;
+
+    // Normalize diagonals
+    if (vx !== 0 && vy !== 0) { vx *= 0.707; vy *= 0.707; }
+
+    this.player.body.setVelocity(vx, vy);
+
+    if (vx !== 0 || vy !== 0) {
+      this.player.play('player_walk', true);
+      // Flip based on movement direction
+      if (vx < 0) this.player.setFlipX(true);
+      else if (vx > 0) this.player.setFlipX(false);
+    } else {
+      if (!this.player.anims.currentAnim?.key.includes('shoot')) {
+        this.player.play('player_idle', true);
+      }
+    }
+
+    // ── Reload input ──
+    if (Phaser.Input.Keyboard.JustDown(k.reload)) this.startReload();
+
+    // ── Enemy AI — pathfind toward player ──
+    this.enemies.children.each(enemy => {
+      const angle = Phaser.Math.Angle.Between(enemy.x, enemy.y, this.player.x, this.player.y);
+      enemy.body.setVelocity(
+        Math.cos(angle) * enemy.speed,
+        Math.sin(angle) * enemy.speed
+      );
+      // Face player
+      if (this.player.x < enemy.x) enemy.setFlipX(true);
+      else enemy.setFlipX(false);
+    });
+
+    // ── Destroy bullets that hit walls ──
+    this.bullets.children.each(b => {
+      if (b.x < TILE || b.x > W - TILE || b.y < TILE || b.y > H - TILE) {
+        b.destroy();
+      }
+    });
+  }
+}
+
+// ============================================================
+// HUD SCENE — Runs in parallel with GameScene
+// ============================================================
+class HUDScene extends Phaser.Scene {
+  constructor() { super('HUDScene'); }
+
+  init(data) { this.gameScene = data.gameScene; }
+
+  create() {
+    const cfg = MANIFEST.game_config;
+    const hudColor     = MANIFEST.palette.hud_text;
+    const hudDim       = MANIFEST.palette.hud_dim;
+    const MAX_HP       = cfg.player.max_hp;
+    const MAX_AMMO     = cfg.player.max_ammo;
+
+    // ── Top bar background ──
+    const topBar = this.add.rectangle(W / 2, 12, W, 22, 0x000000, 0.75).setDepth(20);
+
+    // ── HP Bar ──
+    this.add.text(8, 5, 'HP', {
+      fontSize: '8px', fontFamily: 'Courier New', color: hudDim, fixedWidth: 0
+    }).setDepth(21);
+
+    this.hpBg  = this.add.rectangle(30, 12, 80, 8, 0x440000, 1).setDepth(21).setOrigin(0, 0.5);
+    this.hpBar = this.add.rectangle(30, 12, 80, 8, 0xff2200, 1).setDepth(22).setOrigin(0, 0.5);
+
+    // ── Ammo ──
+    this.ammoText = this.add.text(W / 2 - 30, 5, `${MAX_AMMO}/${MAX_AMMO}`, {
+      fontSize: '9px', fontFamily: 'Courier New', color: hudColor
+    }).setDepth(21);
+
+    this.add.text(W / 2 - 48, 5, 'AMMO', {
+      fontSize: '7px', fontFamily: 'Courier New', color: hudDim
+    }).setDepth(21);
+
+    // ── Wave & Score ──
+    this.waveText = this.add.text(W - 110, 5, 'WAVE  1', {
+      fontSize: '9px', fontFamily: 'Courier New', color: hudColor
+    }).setDepth(21);
+
+    this.scoreText = this.add.text(W - 110, 14, 'SCORE 0', {
+      fontSize: '7px', fontFamily: 'Courier New', color: hudDim
+    }).setDepth(21);
+
+    // ── Reload indicator ──
+    this.reloadText = this.add.text(W / 2, H / 2 + 30, 'RELOADING...', {
+      fontSize: '10px', fontFamily: 'Courier New', color: '#ffcc00',
+      stroke: '#000000', strokeThickness: 2
+    }).setDepth(30).setOrigin(0.5).setVisible(false);
+
+    // ── Wave announcement ──
+    this.waveAnnounce = this.add.text(W / 2, H / 2, '', {
+      fontSize: '18px', fontFamily: 'Courier New', color: hudColor,
+      stroke: '#000000', strokeThickness: 3
+    }).setDepth(30).setOrigin(0.5).setAlpha(0);
+
+    // ── Enemy count bar (bottom) ──
+    this.add.text(8, H - 14, 'ENEMIES', {
+      fontSize: '7px', fontFamily: 'Courier New', color: hudDim
+    }).setDepth(21);
+
+    this.enemyCountText = this.add.text(60, H - 14, '', {
+      fontSize: '8px', fontFamily: 'Courier New', color: hudColor
+    }).setDepth(21);
+
+    // ── Wire up events from GameScene ──
+    const gs = this.gameScene;
+
+    gs.events.on('hpChanged', (hp) => {
+      const pct = Math.max(0, hp / MAX_HP);
+      this.hpBar.width = 80 * pct;
+      const col = pct > 0.5 ? 0xff2200 : pct > 0.25 ? 0xff6600 : 0xff0000;
+      this.hpBar.fillColor = col;
+      // Flash on low HP
+      if (pct < 0.25) {
+        this.tweens.add({ targets: this.hpBar, alpha: 0.3, duration: 100, yoyo: true });
+      }
+    });
+
+    gs.events.on('ammoChanged', (ammo) => {
+      this.ammoText.setText(`${ammo}/${MAX_AMMO}`);
+      this.ammoText.setColor(ammo <= 5 ? '#ff6600' : MANIFEST.palette.hud_text);
+    });
+
+    gs.events.on('reloadStart', () => {
+      this.reloadText.setVisible(true);
+      this.tweens.add({
+        targets: this.reloadText, alpha: { from: 1, to: 0.3 },
+        duration: 300, yoyo: true, repeat: -1, key: 'reloadPulse'
+      });
+    });
+
+    gs.events.on('reloadEnd', () => {
+      this.reloadText.setVisible(false);
+      this.tweens.killTweensOf(this.reloadText);
+      this.reloadText.setAlpha(1);
+    });
+
+    gs.events.on('scoreChanged', (score) => {
+      this.scoreText.setText(`SCORE ${score}`);
+    });
+
+    gs.events.on('waveStart', (waveNum, isBoss) => {
+      this.waveText.setText(`WAVE  ${waveNum}`);
+      const msg = isBoss ? `⚠ BOSS WAVE ${waveNum} ⚠` : `— WAVE ${waveNum} —`;
+      const col = isBoss ? '#ff6600' : MANIFEST.palette.hud_text;
+      this.waveAnnounce.setText(msg).setColor(col).setAlpha(1);
+      this.tweens.add({
+        targets: this.waveAnnounce,
+        alpha: 0, duration: 1200, delay: 1000, ease: 'Power2'
+      });
+      if (isBoss) this.cameras.main.flash(200, 255, 100, 0, false);
+    });
+
+    gs.events.on('waveEnd', (completedWave) => {
+      this.waveAnnounce.setText(`WAVE ${completedWave} CLEAR`).setColor('#44ff44').setAlpha(1);
+      this.tweens.add({
+        targets: this.waveAnnounce,
+        alpha: 0, duration: 800, delay: 1500
+      });
+    });
+
+    gs.events.on('gameOver', (score, wave) => {
+      // Darken
+      this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.7).setDepth(40);
+      this.add.text(W / 2, H / 2 - 35, 'YOU DIED', {
+        fontSize: '28px', fontFamily: 'Courier New', color: '#ff0000',
+        stroke: '#000000', strokeThickness: 4
+      }).setDepth(41).setOrigin(0.5);
+      this.add.text(W / 2, H / 2, `SURVIVED ${wave - 1} WAVES`, {
+        fontSize: '11px', fontFamily: 'Courier New', color: '#ff4400'
+      }).setDepth(41).setOrigin(0.5);
+      this.add.text(W / 2, H / 2 + 18, `FINAL SCORE: ${score}`, {
+        fontSize: '11px', fontFamily: 'Courier New', color: '#ffcc00'
+      }).setDepth(41).setOrigin(0.5);
+      this.add.text(W / 2, H / 2 + 42, 'REFRESH TO RETRY', {
+        fontSize: '9px', fontFamily: 'Courier New', color: '#666666'
+      }).setDepth(41).setOrigin(0.5);
+    });
+
+    // Update enemy count every frame
+    this.time.addEvent({
+      delay: 200, loop: true,
+      callback: () => {
+        const n = gs.enemies ? gs.enemies.countActive(true) : 0;
+        this.enemyCountText.setText(`${n} REMAINING`);
+      }
+    });
+  }
+}
+
+// ============================================================
+// PHASER GAME CONFIG
+// ============================================================
+const config = {
+  type: Phaser.AUTO,
+  width: W,
+  height: H,
+  backgroundColor: '#0d0500',
+  parent: 'game-container',
+  pixelArt: true,
+  antialias: false,
+  physics: {
+    default: 'arcade',
+    arcade: { gravity: { y: 0 }, debug: false }
+  },
+  scene: [PreloadScene, GameScene, HUDScene]
+};
+
+const game = new Phaser.Game(config);
+</script>
+</body>
+</html>

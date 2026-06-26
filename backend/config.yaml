@@ -1,0 +1,32 @@
+# ============================================================
+# DEMAKE ENGINE — Runtime Config
+# Edit this file to change behaviour without touching code
+# ============================================================
+
+server:
+  host: "0.0.0.0"
+  port: 8000
+  reload: true          # Set false in production
+
+storage:
+  upload_dir: "uploads"
+  output_dir: "outputs"
+  max_upload_mb: 100
+
+pipeline:
+  # VLM backend: "moondream" (free, local) or "openai" (cloud, better quality)
+  vlm_backend: "moondream"
+  openai_api_key: ""    # Only needed if vlm_backend is "openai"
+  force_cpu: false      # Set true if no GPU available — slower but works
+
+hardware:
+  vram_limit_mb: 4096
+  cpu_offload: true     # Use system RAM when VRAM is full
+
+genre_templates:
+  available:
+    - "wave_shooter"
+    - "top_down_action_rpg"
+    - "open_world_sandbox"
+    - "side_scroll_platformer"
+  default_fallback: "wave_shooter"
