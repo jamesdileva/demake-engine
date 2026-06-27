@@ -9,8 +9,8 @@ server:
   reload: true          # Set false in production
 
 storage:
-  upload_dir: "uploads"
-  output_dir: "outputs"
+  upload_dir: "uploads"   # Relative to backend/ — works on Windows and Linux
+  output_dir: "outputs"   # Never use /tmp/ — not reliable on Windows
   max_upload_mb: 100
 
 pipeline:

@@ -1,0 +1,28 @@
+# ============================================================
+# DEMAKE ENGINE — Python Dependencies
+# Install with: pip install -r requirements.txt
+# ============================================================
+
+# ── Sprint 1: Backend & API ───────────────────────────────
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+sqlalchemy>=2.0.0
+aiofiles>=23.0.0
+python-multipart>=0.0.9
+pydantic>=2.0.0
+pyyaml>=6.0
+
+# ── Sprint 2: Ingestion & VLM ────────────────────────────
+ffmpeg-python>=0.2.0       # Python wrapper for ffmpeg (ffmpeg must be installed separately)
+Pillow>=10.0.0             # Frame quality scoring
+requests>=2.31.0           # Ollama + OpenAI API calls
+
+# ── Sprint 3: Asset & Audio Generation (uncomment when ready) ──
+# torch>=2.2.0             # Install separately — see Sprint 3 notes
+# diffusers>=0.27.0
+# transformers>=4.40.0
+# accelerate>=0.29.0
+# midiutil>=1.2.1
+
+# ── Sprint 4: Frontend Integration ───────────────────────
+# No additional Python deps — frontend is pure JS

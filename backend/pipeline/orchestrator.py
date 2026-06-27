@@ -9,6 +9,7 @@ Sprint 2: ingestion + vlm_analysis get real implementations.
 Sprint 3: sprite_gen + audio_gen get real implementations.
 Sprint 4: Everything is wired together.
 """
+import os
 import asyncio
 import traceback
 from datetime import datetime
@@ -17,11 +18,19 @@ from sqlalchemy.orm import Session
 from database.db import SessionLocal
 from database.models import Demake
 
-# Will be imported for real in later sprints
-# from pipeline.ingestion   import run_ingestion
-# from pipeline.vlm_analysis import run_vlm_analysis
-# from pipeline.sprite_gen  import run_sprite_gen
-# from pipeline.audio_gen   import run_audio_gen
+# Sprint 2 — real implementations wired in
+from pipeline.ingestion    import run_ingestion
+from pipeline.vlm_analysis import run_vlm_analysis, match_genre_template
+from pipeline.validator    import GameDNA
+import yaml as _yaml
+
+def _load_config():
+    try:
+        with open("config.yaml") as f:
+            return _yaml.safe_load(f)
+    except Exception:
+        return {}
+_CONFIG = _load_config()
 
 # ── Global job queue ──────────────────────────────────────────────────────────
 # asyncio.Queue is thread-safe and works perfectly for a single-worker pipeline.
@@ -107,41 +116,61 @@ async def _run_pipeline(demake_id: str):
             print(f"[Pipeline] ERROR — demake {demake_id} not found in DB")
             return
 
-        # ── Stage 2: Extract frames ────────────────────────────────────────
+        output_dir = os.path.join("outputs", demake_id)
+        os.makedirs(output_dir, exist_ok=True)
+
+        # ── Stage 2: Extract frames (REAL — Sprint 2) ─────────────────────
         await _set_status(db, demake, "extracting_frames", 2, 15,
                           "Extracting keyframes from video...")
-        await asyncio.sleep(1.5)   # STUB — replaced in Sprint 2
-        # output: /outputs/{id}/keyframes/*.png
+        ingestion_result = await asyncio.get_event_loop().run_in_executor(
+            None, run_ingestion, demake.source_path, output_dir
+        )
+        best_frames = ingestion_result["best_frames"]
+        print(f"[Pipeline] Extracted {ingestion_result['frame_count']} frames, "
+              f"best {len(best_frames)} selected")
 
-        # ── Stage 3: VLM Analysis ──────────────────────────────────────────
+        # ── Stage 3: VLM Analysis (REAL — Sprint 2) ───────────────────────
         await _set_status(db, demake, "analyzing", 3, 30,
                           "Analyzing game DNA with vision model...")
-        await asyncio.sleep(2.0)   # STUB — replaced in Sprint 2
-        # output: /outputs/{id}/game_dna.json
+        dna = await asyncio.get_event_loop().run_in_executor(
+            None, run_vlm_analysis, best_frames, output_dir, _CONFIG
+        )
 
-        # ── Stage 4: Genre Matching + Validation ──────────────────────────
+        # ── Stage 4: Genre Matching + Validation (REAL — Sprint 2) ───────
         await _set_status(db, demake, "matching_genre", 4, 45,
                           "Matching genre template...")
-        await asyncio.sleep(0.8)   # STUB — replaced in Sprint 2
-        # output: template selected, Pydantic validated
+        template_id = match_genre_template(dna, _CONFIG)
 
-        # ── Stage 5: Sprite Generation ────────────────────────────────────
+        # Update DB with extracted config
+        import json as _json
+        from database.models import GameConfig
+        game_cfg = GameConfig(
+            demake_id     = demake_id,
+            template_id   = template_id,
+            genre         = dna.genre,
+            color_palette = _json.dumps(dna.color_palette),
+            mechanics     = _json.dumps({"music_vibe": dna.music_vibe,
+                                         "music_tempo": dna.music_tempo}),
+            vlm_raw_output = dna.model_dump_json(),
+        )
+        db.add(game_cfg)
+        db.commit()
+        print(f"[Pipeline] Genre matched: {template_id}")
+
+        # ── Stage 5: Sprite Generation (STUB — Sprint 3) ──────────────────
         await _set_status(db, demake, "generating_sprites", 5, 60,
                           "Generating pixel art sprites...")
-        await asyncio.sleep(2.5)   # STUB — replaced in Sprint 3
-        # output: /outputs/{id}/sprites/*.png
+        await asyncio.sleep(1.0)   # STUB — Sprint 3
 
-        # ── Stage 6: Audio Generation ─────────────────────────────────────
+        # ── Stage 6: Audio Generation (STUB — Sprint 3) ───────────────────
         await _set_status(db, demake, "generating_audio", 6, 80,
                           "Composing chiptune music...")
-        await asyncio.sleep(1.5)   # STUB — replaced in Sprint 3
-        # output: /outputs/{id}/audio/bgm.mid
+        await asyncio.sleep(0.5)   # STUB — Sprint 3
 
-        # ── Stage 7: Manifest Assembly ────────────────────────────────────
+        # ── Stage 7: Manifest Assembly (STUB — Sprint 4) ──────────────────
         await _set_status(db, demake, "assembling", 7, 92,
                           "Assembling game manifest...")
-        await asyncio.sleep(0.5)   # STUB — replaced in Sprint 4
-        # output: /outputs/{id}/manifest.json
+        await asyncio.sleep(0.3)   # STUB — Sprint 4
 
         # ── Stage 8: Done ─────────────────────────────────────────────────
         demake.status       = "ready"
