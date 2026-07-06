@@ -1,0 +1,28 @@
+# Python
+venv/
+backend/pipeline/__pycache__/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Uploads & outputs
+backend/uploads/
+backend/outputs/
+
+# ML models
+backend/models/
+
+# Large media files
+*.mp4
+*.mov
+*.avi
+*.webm

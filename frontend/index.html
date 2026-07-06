@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DEMAKE ENGINE</title>
+<style>
+  :root {
+    --bg:       #080400;
+    --surface:  #120900;
+    --border:   #3d1a00;
+    --primary:  #ff4400;
+    --dim:      #662200;
+    --text:     #ffcc88;
+    --text-dim: #664422;
+    --green:    #44ff44;
+    --yellow:   #ffcc00;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Courier New', monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  /* ── Header ── */
+  .header {
+    text-align: center;
+    margin-bottom: 40px;
+  }
+  .header h1 {
+    font-size: 28px;
+    letter-spacing: 8px;
+    color: var(--primary);
+    text-shadow: 0 0 20px #ff440066;
+    margin-bottom: 6px;
+  }
+  .header p {
+    font-size: 11px;
+    letter-spacing: 3px;
+    color: var(--dim);
+  }
+
+  /* ── Card ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 32px;
+    width: 100%;
+    max-width: 540px;
+    box-shadow: 0 0 40px #ff220011;
+  }
+
+  /* ── Upload zone ── */
+  .upload-zone {
+    border: 2px dashed var(--border);
+    padding: 40px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    position: relative;
+    margin-bottom: 20px;
+  }
+  .upload-zone:hover,
+  .upload-zone.drag-over {
+    border-color: var(--primary);
+    background: #ff44000a;
+  }
+  .upload-zone input[type="file"] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+    width: 100%;
+    height: 100%;
+  }
+  .upload-icon {
+    font-size: 36px;
+    margin-bottom: 12px;
+    display: block;
+  }
+  .upload-zone h2 {
+    font-size: 13px;
+    letter-spacing: 3px;
+    color: var(--text);
+    margin-bottom: 8px;
+  }
+  .upload-zone p {
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+  }
+  .upload-zone .file-selected {
+    font-size: 11px;
+    color: var(--green);
+    margin-top: 10px;
+    letter-spacing: 1px;
+  }
+
+  /* ── Button ── */
+  .btn {
+    width: 100%;
+    padding: 14px;
+    background: var(--primary);
+    color: #000;
+    border: none;
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    font-weight: bold;
+    letter-spacing: 4px;
+    cursor: pointer;
+    transition: background 0.15s, box-shadow 0.15s;
+  }
+  .btn:hover:not(:disabled) {
+    background: #ff6600;
+    box-shadow: 0 0 20px #ff440055;
+  }
+  .btn:disabled {
+    background: var(--border);
+    color: var(--text-dim);
+    cursor: not-allowed;
+  }
+
+  /* ── Progress section ── */
+  #progress-section {
+    display: none;
+    margin-top: 28px;
+  }
+
+  .stage-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    letter-spacing: 2px;
+    margin-bottom: 8px;
+  }
+  .stage-label .status-text { color: var(--text); }
+  .stage-label .pct-text    { color: var(--primary); }
+
+  .progress-track {
+    background: #1a0800;
+    border: 1px solid var(--border);
+    height: 12px;
+    margin-bottom: 16px;
+    position: relative;
+    overflow: hidden;
+  }
+  .progress-bar {
+    height: 100%;
+    background: var(--primary);
+    width: 0%;
+    transition: width 0.4s ease;
+    position: relative;
+  }
+  .progress-bar::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 4px;
+    height: 100%;
+    background: #fff8;
+    animation: pulse 0.8s ease-in-out infinite alternate;
+  }
+  @keyframes pulse { from { opacity: 0.3; } to { opacity: 1; } }
+
+  /* ── Stage steps ── */
+  .stages {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 20px;
+  }
+  .stage-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 10px;
+    letter-spacing: 1px;
+    color: var(--text-dim);
+    transition: color 0.3s;
+  }
+  .stage-item.active  { color: var(--text); }
+  .stage-item.done    { color: var(--green); }
+  .stage-item.failed  { color: var(--primary); }
+  .stage-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--border);
+    flex-shrink: 0;
+    transition: background 0.3s;
+  }
+  .stage-item.active  .stage-dot { background: var(--yellow); animation: pulse 0.6s infinite alternate; }
+  .stage-item.done    .stage-dot { background: var(--green); animation: none; }
+  .stage-item.failed  .stage-dot { background: var(--primary); animation: none; }
+
+  /* ── Message log ── */
+  .log-line {
+    font-size: 10px;
+    color: var(--dim);
+    letter-spacing: 1px;
+    min-height: 14px;
+    margin-bottom: 16px;
+  }
+  .log-line.error { color: var(--primary); }
+
+  /* ── Play button (shown when ready) ── */
+  #play-section {
+    display: none;
+    text-align: center;
+    margin-top: 24px;
+  }
+  #play-section h2 {
+    font-size: 14px;
+    letter-spacing: 4px;
+    color: var(--green);
+    margin-bottom: 6px;
+    text-shadow: 0 0 16px #44ff4466;
+  }
+  #play-section p {
+    font-size: 10px;
+    color: var(--dim);
+    letter-spacing: 1px;
+    margin-bottom: 16px;
+  }
+  .btn-play {
+    background: var(--green);
+    color: #000;
+    text-decoration: none;
+    display: inline-block;
+    padding: 14px 40px;
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    font-weight: bold;
+    letter-spacing: 4px;
+    transition: box-shadow 0.2s;
+  }
+  .btn-play:hover {
+    box-shadow: 0 0 24px #44ff4455;
+  }
+
+  /* ── Examples footer ── */
+  .footer {
+    margin-top: 32px;
+    text-align: center;
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 2px;
+    line-height: 2;
+  }
+  .footer span { color: var(--dim); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>DEMAKE ENGINE</h1>
+  <p>UPLOAD A GAME TRAILER — GET A PLAYABLE 8-BIT DEMAKE</p>
+</div>
+
+<div class="card">
+
+  <!-- Upload form -->
+  <div id="upload-section">
+    <div class="upload-zone" id="drop-zone">
+      <input type="file" id="file-input" accept=".mp4" />
+      <span class="upload-icon">🎮</span>
+      <h2>DROP YOUR TRAILER HERE</h2>
+      <p>MP4 FORMAT · MAX 100MB</p>
+      <p>KINGDOM HEARTS · COD ZOMBIES · GTA · ANY GAME</p>
+      <div class="file-selected" id="file-name"></div>
+    </div>
+
+    <button class="btn" id="upload-btn" disabled>
+      ◆ GENERATE DEMAKE ◆
+    </button>
+  </div>
+
+  <!-- Progress tracking -->
+  <div id="progress-section">
+    <div class="stage-label">
+      <span class="status-text" id="status-text">INITIALIZING...</span>
+      <span class="pct-text"   id="pct-text">0%</span>
+    </div>
+
+    <div class="progress-track">
+      <div class="progress-bar" id="progress-bar"></div>
+    </div>
+
+    <div class="stages" id="stages-list">
+      <!-- Populated by JS -->
+    </div>
+
+    <div class="log-line" id="log-line">Starting pipeline...</div>
+  </div>
+
+  <!-- Play button -->
+  <div id="play-section">
+    <h2>◆ DEMAKE READY ◆</h2>
+    <p id="game-title-label"></p>
+    <a class="btn-play" id="play-link" href="#" target="_blank">
+      ▶ PLAY YOUR DEMAKE
+    </a>
+  </div>
+
+  <!-- Manual check — shown after 30s if still processing -->
+  <div id="manual-check" style="display:none; margin-top:16px; text-align:center;">
+    <button class="btn" id="check-btn" style="font-size:10px; padding:10px; letter-spacing:2px;">
+      ◆ CHECK IF READY ◆
+    </button>
+  </div>
+
+</div>
+
+<div class="footer">
+  <span>WORKS BEST WITH:</span><br>
+  GAME TRAILERS · 30-120 SECONDS · ACTION / RPG / SHOOTER<br>
+  <span>POWERED BY STABLE DIFFUSION · MOONDREAM · TONE.JS</span>
+</div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+const API_BASE = "http://localhost:8000";   // FastAPI backend — must be running
+
+// ── Pipeline stages shown in the UI ──────────────────────────────────────────
+const STAGES = [
+  { key: "queued",             label: "QUEUED IN PIPELINE"        },
+  { key: "extracting_frames",  label: "EXTRACTING KEYFRAMES"      },
+  { key: "analyzing",          label: "ANALYZING WITH VISION AI"  },
+  { key: "matching_genre",     label: "MATCHING GAME TEMPLATE"    },
+  { key: "generating_sprites", label: "GENERATING PIXEL ART"      },
+  { key: "generating_audio",   label: "COMPOSING CHIPTUNE MUSIC"  },
+  { key: "assembling",         label: "ASSEMBLING MANIFEST"       },
+  { key: "ready",              label: "COMPLETE"                  },
+];
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let selectedFile  = null;
+let currentDemakeId = null;
+let ws            = null;
+let pollInterval  = null;
+
+// ── DOM refs ──────────────────────────────────────────────────────────────────
+const fileInput     = document.getElementById("file-input");
+const fileName      = document.getElementById("file-name");
+const uploadBtn     = document.getElementById("upload-btn");
+const dropZone      = document.getElementById("drop-zone");
+const uploadSection = document.getElementById("upload-section");
+const progressSection = document.getElementById("progress-section");
+const playSection   = document.getElementById("play-section");
+const progressBar   = document.getElementById("progress-bar");
+const statusText    = document.getElementById("status-text");
+const pctText       = document.getElementById("pct-text");
+const logLine       = document.getElementById("log-line");
+const stagesList    = document.getElementById("stages-list");
+const playLink      = document.getElementById("play-link");
+const gameTitleLabel = document.getElementById("game-title-label");
+
+// ── Build stage list ──────────────────────────────────────────────────────────
+STAGES.forEach(stage => {
+  const el = document.createElement("div");
+  el.className = "stage-item";
+  el.id = `stage-${stage.key}`;
+  el.innerHTML = `<div class="stage-dot"></div><span>${stage.label}</span>`;
+  stagesList.appendChild(el);
+});
+
+// ── File selection ────────────────────────────────────────────────────────────
+fileInput.addEventListener("change", e => {
+  const file = e.target.files[0];
+  if (file) selectFile(file);
+});
+
+dropZone.addEventListener("dragover", e => {
+  e.preventDefault();
+  dropZone.classList.add("drag-over");
+});
+dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
+dropZone.addEventListener("drop", e => {
+  e.preventDefault();
+  dropZone.classList.remove("drag-over");
+  const file = e.dataTransfer.files[0];
+  if (file && file.name.toLowerCase().endsWith(".mp4")) selectFile(file);
+  else showLog("Please drop an MP4 file.", true);
+});
+
+function selectFile(file) {
+  if (file.size > 100 * 1024 * 1024) {
+    showLog("File too large. Max 100MB.", true);
+    return;
+  }
+  selectedFile = file;
+  fileName.textContent = `✓ ${file.name} (${(file.size / 1024 / 1024).toFixed(1)}MB)`;
+  uploadBtn.disabled = false;
+}
+
+// ── Upload ────────────────────────────────────────────────────────────────────
+uploadBtn.addEventListener("click", async () => {
+  if (!selectedFile) return;
+
+  uploadBtn.disabled = true;
+  uploadBtn.textContent = "UPLOADING...";
+
+  const formData = new FormData();
+  formData.append("file", selectedFile);
+
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/demake/upload`, {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || `Upload failed (${res.status})`);
+    }
+
+    const data = await res.json();
+    currentDemakeId = data.demake_id;
+
+    // Switch to progress view
+    uploadSection.style.display = "none";
+    progressSection.style.display = "block";
+
+    showLog("Upload complete. Pipeline starting...");
+    startProgressTracking(currentDemakeId);
+
+  } catch (err) {
+    uploadBtn.disabled = false;
+    uploadBtn.textContent = "◆ GENERATE DEMAKE ◆";
+    showLog(`Error: ${err.message}`, true);
+  }
+});
+
+// ── Progress tracking via WebSocket + polling fallback ────────────────────────
+// Track current status so polling knows when to stop
+let currentStatus = "queued";
+let _wsRetries = 0;
+const _wsMaxRetries = 5;
+
+function startProgressTracking(demakeId) {
+  _connectWS(demakeId);
+}
+
+function _connectWS(demakeId) {
+  if (_wsRetries >= _wsMaxRetries) {
+    console.log("[WS] Max retries — polling only");
+    startPolling(demakeId);
+    return;
+  }
+  try {
+    ws = new WebSocket(`ws://localhost:8000/ws/demake/${demakeId}`);
+    ws.onopen = () => {
+      _wsRetries = 0;
+      ws._pingInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) ws.send("ping");
+      }, 15000);
+    };
+    ws.onmessage = e => {
+      try { updateProgress(JSON.parse(e.data)); } catch(_) {}
+    };
+    ws.onclose = () => {
+      clearInterval(ws._pingInterval);
+      if (["ready","failed"].includes(currentStatus)) return;
+      _wsRetries++;
+      const delay = Math.min(1000 * Math.pow(2, _wsRetries - 1), 16000);
+      console.log(`[WS] Reconnecting in ${delay}ms (${_wsRetries}/${_wsMaxRetries})`);
+      setTimeout(() => {
+        if (!["ready","failed"].includes(currentStatus)) {
+          _pollOnce(demakeId);
+          _connectWS(demakeId);
+        }
+      }, delay);
+    };
+    ws.onerror = () => {};
+  } catch(e) { startPolling(demakeId); }
+}
+
+function startPolling(demakeId) {
+  if (pollInterval) return;
+  pollInterval = setInterval(() => _pollOnce(demakeId), 3000);
+}
+
+async function _pollOnce(demakeId) {
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/demake/${demakeId}/status`);
+    if (res.ok) {
+      const data = await res.json();
+      updateProgress(data);
+      if (["ready","failed"].includes(data.status)) {
+        clearInterval(pollInterval); pollInterval = null;
+      }
+    }
+  } catch(e) {}
+}
+
+// ── Update the UI from a status payload ───────────────────────────────────────
+function updateProgress(data) {
+  const { status, progress_pct, message, stage } = data;
+  currentStatus = status;  // Keep track for WS fallback logic
+
+  // Progress bar
+  progressBar.style.width = `${progress_pct || 0}%`;
+  pctText.textContent = `${progress_pct || 0}%`;
+  statusText.textContent = (status || "").replace(/_/g, " ").toUpperCase();
+
+  // Log message
+  showLog(message || "");
+
+  // Update stage indicators
+  const stageKeys = STAGES.map(s => s.key);
+  const currentIdx = stageKeys.indexOf(status);
+
+  STAGES.forEach((s, i) => {
+    const el = document.getElementById(`stage-${s.key}`);
+    if (!el) return;
+    el.className = "stage-item";
+    if (status === "failed") {
+      if (i < currentIdx) el.classList.add("done");
+      else if (i === currentIdx) el.classList.add("failed");
+    } else {
+      if (i < currentIdx || status === "ready") el.classList.add("done");
+      else if (i === currentIdx) el.classList.add("active");
+    }
+  });
+
+  // Handle completion
+  if (status === "ready") {
+    if (ws) ws.close();
+    onReady(data);
+  } else if (status === "failed") {
+    if (ws) ws.close();
+    showLog(`Pipeline failed: ${data.error || "Unknown error"}`, true);
+  }
+}
+
+// ── Game ready ────────────────────────────────────────────────────────────────
+async function onReady(data) {
+  // Fetch the manifest to get the game title
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/demake/${currentDemakeId}/manifest`);
+    if (res.ok) {
+      const manifest = await res.json();
+      const title = manifest.title || "YOUR DEMAKE";
+      gameTitleLabel.textContent = title;
+    }
+  } catch (e) {
+    gameTitleLabel.textContent = "YOUR DEMAKE";
+  }
+
+  // Point play link to the game page
+  playLink.href = `http://localhost:8000/game.html?id=${currentDemakeId}&api=http://localhost:8000`;
+  playSection.style.display = "block";
+
+  progressSection.querySelector(".progress-bar").style.background = "var(--green)";
+  showLog("Generation complete! Your demake is ready.");
+}
+
+function showLog(msg, isError = false) {
+  logLine.textContent = msg;
+  logLine.className = "log-line" + (isError ? " error" : "");
+}
+
+// Manual check button — polls once on click
+document.getElementById("check-btn").addEventListener("click", async () => {
+  if (!currentDemakeId) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/demake/${currentDemakeId}/status`);
+    if (res.ok) {
+      const data = await res.json();
+      updateProgress(data);
+      if (!["ready", "failed"].includes(data.status)) {
+        showLog(`Still running: ${data.message || data.status}`);
+      }
+    }
+  } catch (e) {
+    showLog("Could not reach backend — is uvicorn still running?", true);
+  }
+});
+
+// Show manual check button after 30s as a safety net
+// Catches cases where WS closed and polling also missed the ready state
+setTimeout(() => {
+  if (currentDemakeId && !["ready", "failed"].includes(currentStatus)) {
+    document.getElementById("manual-check").style.display = "block";
+  }
+}, 30000);
+</script>
+</body>
+</html>

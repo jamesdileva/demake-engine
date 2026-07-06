@@ -70,7 +70,20 @@ def run_ingestion(source_path: str, output_dir: str) -> dict:
 
     # ── Step 3: Score frames and pick the best 5 ─────────────────────────────
     scored = _score_frames(keyframe_paths)
-    best_frames = [path for path, score in scored[:5]]
+
+    # Pick 5 frames spread across the video timeline
+    # This gives VLM variety: menu, exploration, combat, cutscene
+    # Rather than 5 similar high-scoring combat frames
+    if len(scored) >= 5:
+        # Divide timeline into 5 segments, pick best frame from each
+        segment_size = len(scored) // 5
+        best_frames = []
+        for i in range(5):
+            segment = scored[i * segment_size:(i + 1) * segment_size]
+            if segment:
+                best_frames.append(segment[0][0])  # Best in segment
+    else:
+        best_frames = [path for path, score in scored]
     print(f"[Ingestion] Best 5 frames selected by quality score")
 
     # ── Step 4: Extract audio sample (30s from middle of video) ──────────────

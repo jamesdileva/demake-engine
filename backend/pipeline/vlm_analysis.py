@@ -96,6 +96,39 @@ def run_vlm_analysis(best_frames: list[str], output_dir: str, config: dict) -> G
         print("[VLM] All attempts failed — using safe defaults")
         dna = get_safe_defaults("wave_shooter")
 
+    # Title-based genre override — if llava correctly identifies the game,
+    # trust the known genre over the VLM classification
+    TITLE_GENRE_MAP = {
+        "kingdom hearts": "top_down_action_rpg",
+        "zelda":          "top_down_action_rpg",
+        "diablo":         "top_down_action_rpg",
+        "dark souls":     "top_down_action_rpg",
+        "elden ring":     "top_down_action_rpg",
+        "pokemon":        "turn_based_rpg",
+        "final fantasy":  "turn_based_rpg",
+        "undertale":      "turn_based_rpg",
+        "octopath":       "turn_based_rpg",
+        "persona":        "turn_based_rpg",
+        "gta":            "open_world_sandbox",
+        "grand theft":    "open_world_sandbox",
+        "cyberpunk":      "open_world_sandbox",
+        "saints row":     "open_world_sandbox",
+        "mario":          "side_scroll_platformer",
+        "sonic":          "side_scroll_platformer",
+        "hollow knight":  "side_scroll_platformer",
+        "cod zombies":    "wave_shooter",
+        "call of duty":   "wave_shooter",
+        "halo":           "wave_shooter",
+    }
+    title_lower = (dna.title_guess or "").lower()
+    for title_key, forced_genre in TITLE_GENRE_MAP.items():
+        if title_key in title_lower:
+            if dna.genre != forced_genre:
+                print(f"[VLM] Title override: '{dna.title_guess}' → {forced_genre} (was {dna.genre})")
+                dna.genre = forced_genre
+                dna.confidence = max(dna.confidence, 0.75)
+            break
+
     # Write game_dna.json to output directory
     dna_path = os.path.join(output_dir, "game_dna.json")
     with open(dna_path, "w") as f:
@@ -106,75 +139,127 @@ def run_vlm_analysis(best_frames: list[str], output_dir: str, config: dict) -> G
 
 
 # ── Moondream backend (free, local, Ollama) ────────────────────────────────────
+def _extract_json_from_text(text: str) -> str:
+    """Extract JSON object from model output that may contain extra text."""
+    import re
+    text = text.strip()
+    if text.startswith("{"):
+        return text
+    start = text.find("{")
+    end   = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return text[start:end+1]
+    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if match:
+        return match.group(1)
+    return text
+
+
 def _run_moondream(best_frames: list[str]) -> GameDNA | None:
     """
-    Run Moondream via Ollama for free local VLM inference.
-
-    Requires: ollama running locally with moondream pulled:
-        ollama pull moondream
-        ollama serve
+    Run best available Ollama vision model (llava preferred, moondream fallback).
+    LLaVA is much better at structured JSON output than Moondream.
+    Install: ollama pull llava
     """
     try:
         import requests
     except ImportError:
-        raise RuntimeError("requests not installed — run: pip install requests")
+        raise RuntimeError("requests not installed")
 
-    ollama_url = "http://localhost:11434/api/chat"
+    ollama_url = "http://localhost:11434/api/generate"
 
-    # Build message with up to 3 frames (Moondream handles multiple images)
+    # llava is the most reliable for structured JSON output
+    # bakllava removed — returns single character responses for this prompt style
+    # moondream kept as last resort fallback
+    available_model = None
+    for model in ["llava", "moondream"]:
+        try:
+            r = requests.post("http://localhost:11434/api/show",
+                              json={"name": model}, timeout=5)
+            if r.status_code == 200:
+                available_model = model
+                print(f"[VLM] Using model: {model}")
+                break
+        except Exception:
+            continue
+
+    if not available_model:
+        print("[VLM] No vision model found. Run: ollama pull llava")
+        return None
+
+    # 3 frames — better genre detection, especially for games with distinct scenes
+    # (Pokemon has overworld + battle, KH has exploration + combat)
     frames_to_use = best_frames[:3]
     images_b64 = []
     for frame_path in frames_to_use:
         with open(frame_path, "rb") as f:
             images_b64.append(base64.b64encode(f.read()).decode())
+    print(f"[VLM] Sending {len(images_b64)} frames to {available_model}")
 
-    messages = [
-        {
-            "role": "user",
-            "content": VLM_SYSTEM_PROMPT,
-            "images": images_b64
-        }
-    ]
+    PROMPT = """You are a video game expert. Look at these game screenshots carefully.
 
-    last_output = ""
+Reply with ONLY this JSON object, filling in each field. No other text:
+
+{
+  "title_guess": "your best guess at the game name",
+  "genre": "wave_shooter",
+  "setting": "describe the world in one sentence",
+  "color_palette": ["#000000", "#000000", "#000000", "#000000"],
+  "player_description": "describe the main character",
+  "enemy_description": "describe the main enemy type",
+  "boss_description": "describe the boss or villain",
+  "environment_description": "describe the level environment",
+  "music_vibe": "intense_action",
+  "music_tempo": "fast",
+  "confidence": 0.8
+}
+
+IMPORTANT for genre — use these rules in order, pick the FIRST one that matches:
+1. If battle MENU with FIGHT/ATTACK/ITEM commands visible -> turn_based_rpg
+2. If CARS or VEHICLES driving in a CITY with a MINIMAP -> open_world_sandbox
+3. If SIDE-VIEW camera with player JUMPING between PLATFORMS -> side_scroll_platformer
+4. If player uses a SWORD, KEYBLADE, or MAGIC SPELLS + companion characters follow + there is world exploration -> top_down_action_rpg
+5. If HUD shows a WAVE NUMBER or ROUND COUNTER + player fires a GUN with ammo -> wave_shooter
+6. If none match clearly, pick top_down_action_rpg as default for action games.
+NOTE: Kingdom Hearts = top_down_action_rpg. Zelda = top_down_action_rpg. Diablo = top_down_action_rpg.
+
+IMPORTANT for music_vibe — pick exactly one:
+intense_action, dark_horror, epic_adventure, urban_gritty, mysterious
+
+IMPORTANT for music_tempo — pick exactly one:
+slow, medium, fast, frantic
+
+Replace all placeholder values with real observations from the screenshots."""
+
     for attempt in range(MAX_RETRIES):
         try:
             resp = requests.post(
                 ollama_url,
                 json={
-                    "model":  "moondream",
-                    "messages": messages,
+                    "model":  available_model,
+                    "prompt": PROMPT,
+                    "images": images_b64,
                     "stream": False,
-                    "options": {
-                        "temperature": 0.1,   # Low temp = more consistent JSON
-                        "num_predict": 600,
-                    }
+                    "options": {"temperature": 0.1, "num_predict": 800}
                 },
-                timeout=120  # Moondream can be slow on first run
+                timeout=480  # 8 minutes — enough for 3 frames on any GPU
             )
             resp.raise_for_status()
-            raw = resp.json()["message"]["content"]
-            last_output = raw
+            raw = resp.json().get("response", "")
+            raw = _extract_json_from_text(raw)
+            print(f"[VLM] Raw output (attempt {attempt+1}): {raw[:150]}...")
 
             dna = validate_vlm_output(raw, attempt)
             if dna:
                 return dna
 
-            # Failed validation — add correction to conversation
-            messages.append({"role": "assistant", "content": raw})
-            messages.append({
-                "role": "user",
-                "content": build_retry_prompt(raw, "Schema validation failed")
-            })
-
         except requests.exceptions.ConnectionError:
-            print("[VLM] Ollama not running. Start it with: ollama serve")
-            print("[VLM] Then pull moondream: ollama pull moondream")
+            print("[VLM] Ollama not running. Start with: ollama serve")
             return None
         except Exception as e:
-            print(f"[VLM] Moondream attempt {attempt + 1} error: {e}")
+            print(f"[VLM] Attempt {attempt + 1} error: {e}")
 
-    print("[VLM] Moondream: all retries exhausted")
+    print("[VLM] All retries exhausted")
     return None
 
 

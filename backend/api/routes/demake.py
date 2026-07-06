@@ -198,17 +198,23 @@ def get_asset(demake_id: str, filename: str, db: Session = Depends(get_db)):
     if not demake:
         raise HTTPException(status_code=404, detail="Demake not found.")
 
-    # Security: strip any path components from filename
     safe_filename = os.path.basename(filename)
-    asset_path    = os.path.join(OUTPUT_DIR, demake_id, safe_filename)
 
-    if not os.path.exists(asset_path):
-        raise HTTPException(
-            status_code=404,
-            detail=f"Asset '{safe_filename}' not found for this demake."
-        )
+    # Search in subdirectories — sprites are in sprites/, audio in audio/
+    search_paths = [
+        os.path.join(OUTPUT_DIR, demake_id, safe_filename),
+        os.path.join(OUTPUT_DIR, demake_id, "sprites", safe_filename),
+        os.path.join(OUTPUT_DIR, demake_id, "audio", safe_filename),
+    ]
 
-    return FileResponse(asset_path)
+    for asset_path in search_paths:
+        if os.path.exists(asset_path):
+            return FileResponse(asset_path)
+
+    raise HTTPException(
+        status_code=404,
+        detail=f"Asset '{safe_filename}' not found. Searched in sprites/ and audio/ subdirs."
+    )
 
 
 # ── WebSocket /ws/demake/{id} ──────────────────────────────────────────────────

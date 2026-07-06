@@ -40,15 +40,33 @@
 
 <div id="header">◆ DEMAKE ENGINE v0.1 — WAVE SHOOTER TEMPLATE ◆</div>
 <div id="game-container"></div>
-<div id="footer">WASD / ARROWS — MOVE &nbsp;|&nbsp; MOUSE — AIM &amp; SHOOT &nbsp;|&nbsp; R — RELOAD &nbsp;|&nbsp; SPRINT 0 BUILD</div>
+<div id="footer">WASD / ARROWS — MOVE &nbsp;|&nbsp; MOUSE — AIM &amp; SHOOT &nbsp;|&nbsp; R — RELOAD</div>
+
+<!-- Loading overlay shown while manifest fetches -->
+<div id="loading-overlay" style="
+  position:fixed; inset:0; background:#080400;
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  font-family:'Courier New',monospace; color:#ff4400;
+  z-index:999;
+">
+  <div style="font-size:13px; letter-spacing:4px; margin-bottom:16px;">LOADING DEMAKE...</div>
+  <div id="load-msg" style="font-size:10px; color:#662200; letter-spacing:2px;">Fetching manifest</div>
+</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.60.0/phaser.min.js"></script>
 <script>
 // ============================================================
-// MANIFEST — In Sprint 4 this is fetched from /api/v1/demake/{id}/manifest
-// For Sprint 0 it's hardcoded here to prove the engine works
+// MANIFEST LOADER — Sprint 4
+// Reads ?id= and ?api= from URL, fetches real manifest from backend.
+// Falls back to hardcoded test manifest if no id param present.
 // ============================================================
-const MANIFEST = {
+const urlParams  = new URLSearchParams(window.location.search);
+const DEMAKE_ID  = urlParams.get("id");
+const API_BASE   = urlParams.get("api") || "http://localhost:8000";
+
+// Hardcoded fallback for testing game.html directly (no pipeline needed)
+const FALLBACK_MANIFEST = {
   demake_id: "test-001",
   title: "ZOMBIE BUNKER",
   template: "wave_shooter",
@@ -73,14 +91,257 @@ const MANIFEST = {
   }
 };
 
-const W = 480, H = 320;
-const TILE = 16;
+// Converts hex string palette from API to Phaser integer format
+function normalizePalette(palette) {
+  const toInt = v => {
+    if (typeof v === "number") return v;
+    const h = String(v).replace("#", "");
+    return parseInt(h, 16);
+  };
+  return {
+    primary:    toInt(palette.primary    || "#1a0a00"),
+    secondary:  toInt(palette.secondary  || "#3d2b1f"),
+    accent:     toInt(palette.accent     || "#8b1a00"),
+    highlight:  toInt(palette.highlight  || "#ff4400"),
+    background: toInt(palette.background || "#0d0500"),
+    floor:      toInt(palette.primary    || "#1a0e06"),
+    wall:       toInt(palette.secondary  || "#0f0804"),
+    hud_text:   palette.hud_text  || "#ff4400",
+    hud_bg:     palette.hud_bg    || "#000000",
+    hud_dim:    palette.hud_dim   || "#662200",
+  };
+}
+
+let MANIFEST = null;
+
+async function loadManifest() {
+  const loadMsg = document.getElementById("load-msg");
+
+  if (!DEMAKE_ID) {
+    // No ID in URL — use fallback for direct testing
+    loadMsg.textContent = "No ID found — loading test manifest";
+    MANIFEST = FALLBACK_MANIFEST;
+    startGame();
+    return;
+  }
+
+  try {
+    loadMsg.textContent = `Fetching manifest for ${DEMAKE_ID.slice(0, 8)}...`;
+    const res = await fetch(`${API_BASE}/api/v1/demake/${DEMAKE_ID}/manifest`);
+
+    if (!res.ok) {
+      throw new Error(`API returned ${res.status}`);
+    }
+
+    const data = await res.json();
+    data.palette = normalizePalette(data.palette || {});
+
+    // Ensure game_config has required fields with fallbacks
+    data.game_config = data.game_config || {};
+    data.game_config.physics  = data.game_config.physics  || FALLBACK_MANIFEST.game_config.physics;
+    data.game_config.waves    = data.game_config.waves    || FALLBACK_MANIFEST.game_config.waves;
+    data.game_config.player   = data.game_config.player   || FALLBACK_MANIFEST.game_config.player;
+    data.game_config.enemy    = data.game_config.enemy    || FALLBACK_MANIFEST.game_config.enemy;
+    data.game_config.boss     = data.game_config.boss     || FALLBACK_MANIFEST.game_config.boss;
+
+    MANIFEST = data;
+    loadMsg.textContent = `Loaded: ${MANIFEST.title}`;
+    startGame();
+
+  } catch (err) {
+    loadMsg.textContent = `Error: ${err.message} — using test manifest`;
+    console.warn("Manifest fetch failed, using fallback:", err);
+    MANIFEST = FALLBACK_MANIFEST;
+    setTimeout(startGame, 1200);
+  }
+}
+
+function startGame() {
+  document.getElementById("loading-overlay").style.display = "none";
+  document.getElementById("header").textContent =
+    `◆ ${MANIFEST.title || "DEMAKE"} ◆`;
+  bootPhaser();
+}
+
+// Start loading immediately
+loadManifest();
+
+// Global constants used by Phaser scenes and generateTextures
+// Declared as var so they're accessible across all functions
+var W = 480, H = 320;
+var TILE = 16;
+
+// ============================================================
+// TILEMAP RENDERER — Sprint 7
+// Reads WFC-generated tilemap from manifest and renders it in Phaser
+// Falls back to procedural if no tilemap in manifest
+// ============================================================
+class TilemapRenderer {
+  constructor(scene) {
+    this.scene   = scene;
+    this.tilemap = MANIFEST?.tilemap || null;
+    this.walls   = null;  // Physics static group for impassable tiles
+    this.worldW  = W;
+    this.worldH  = H;
+  }
+
+  /**
+   * Build the level from WFC tilemap data.
+   * Returns { walls, playerSpawn, enemySpawns, itemSpawns }
+   */
+  build() {
+    if (!this.tilemap) {
+      console.log("[Tilemap] No tilemap in manifest — using procedural fallback");
+      return this._buildProcedural();
+    }
+
+    const { grid, tile_defs, width, height, tile_size, spawn_points } = this.tilemap;
+    const tw = tile_size || TILE;
+    const p  = MANIFEST.palette;
+
+    // World size from tilemap
+    this.worldW = width  * tw;
+    this.worldH = height * tw;
+
+    // Set world bounds
+    this.scene.physics.world.setBounds(0, 0, this.worldW, this.worldH);
+    this.scene.cameras.main.setBounds(0, 0, this.worldW, this.worldH);
+
+    // Background
+    const bgColor = typeof p.background === 'number' ? p.background
+      : parseInt((p.background || '#0a0a0a').replace('#',''), 16);
+    this.scene.add.rectangle(this.worldW/2, this.worldH/2,
+      this.worldW, this.worldH, bgColor).setDepth(0);
+
+    // Create wall group
+    this.walls = this.scene.physics.add.staticGroup();
+
+    // Render each tile
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const tileId  = grid[y]?.[x] || 'void';
+        const tileDef = tile_defs[tileId];
+        if (!tileDef || tileId === 'void') continue;
+
+        // Skip spawn tiles — sprites are placed on them
+        if (tileId === 'player' || tileId === 'enemy' || tileId === 'spawn') continue;
+
+        const px = x * tw + tw/2;
+        const py = y * tw + tw/2;
+
+        // Parse tile color
+        let color = 0x333333;
+        try {
+          color = parseInt((tileDef.color || '#333333').replace('#',''), 16);
+        } catch(e) {}
+
+        const isImpassable = !tileDef.passable;
+
+        // Draw tile
+        this.scene.add.rectangle(px, py, tw-1, tw-1, color, 0.9)
+          .setDepth(isImpassable ? 2 : 1);
+
+        // Wall bevel — lighter top/left edge so walls pop against floor
+        if (isImpassable) {
+          this.scene.add.rectangle(px, py - tw/2 + 1, tw-2, 2, 0xffffff, 0.15).setDepth(3);
+          this.scene.add.rectangle(px - tw/2 + 1, py, 2, tw-2, 0xffffff, 0.1).setDepth(3);
+        }
+
+        // Add to physics if impassable
+        if (isImpassable) {
+          const physRect = this.scene.add.rectangle(px, py, tw, tw, color, 0)
+            .setDepth(2);
+          physRect.tileType = tileId;
+          this.scene.physics.add.existing(physRect, true);
+          this.walls.add(physRect);
+        }
+
+        // Special tile decorations
+        if (tileId === 'torch' || tileId === 'ammo') {
+          this.scene.add.rectangle(px, py, 4, 4, 0xffcc00).setDepth(3);
+        }
+        if (tileId === 'chest' || tileId === 'mission' || tileId === 'goal') {
+          this.scene.add.text(px-4, py-5, '★',
+            { fontSize: '8px', color: '#ffff00' }).setDepth(3);
+        }
+      }
+    }
+
+    // Resolve spawn points
+    const [px, py] = Array.isArray(spawn_points?.player)
+      ? spawn_points.player : [2, height/2|0];
+
+    const playerSpawn = {
+      x: px * tw + tw/2,
+      y: py * tw + tw/2,
+    };
+
+    const enemySpawns = (spawn_points?.enemies || []).map(([ex, ey]) => ({
+      x: ex * tw + tw/2,
+      y: ey * tw + tw/2,
+      tileType: grid[ey]?.[ex] || 'enemy',
+    }));
+
+    const itemSpawns = (spawn_points?.items || []).map(([ix, iy]) => ({
+      x: ix * tw + tw/2,
+      y: iy * tw + tw/2,
+      tileType: grid[iy]?.[ix] || 'item',
+    }));
+
+    console.log(`[Tilemap] Built ${width}x${height} map | `+
+      `player@(${px},${py}) | ${enemySpawns.length} enemies | ${itemSpawns.length} items`);
+
+    return { walls: this.walls, playerSpawn, enemySpawns, itemSpawns, worldWidth: this.worldW, worldHeight: this.worldH };
+  }
+
+  /** Procedural fallback — used when no tilemap in manifest */
+  _buildProcedural() {
+    const p = MANIFEST.palette;
+    const bgColor = typeof p.background === 'number' ? p.background
+      : parseInt((p.background||'#0a0a0a').replace('#',''),16);
+
+    this.worldW = W;
+    this.worldH = H;
+    this.scene.physics.world.setBounds(0, 0, W, H);
+    this.scene.cameras.main.setBounds(0, 0, W, H);
+    this.scene.add.rectangle(W/2, H/2, W, H, bgColor).setDepth(0);
+    this.walls = this.scene.physics.add.staticGroup();
+
+    // Border walls
+    [
+      [W/2, 8,    W, 16],
+      [W/2, H-8,  W, 16],
+      [8,   H/2,  16, H],
+      [W-8, H/2,  16, H],
+    ].forEach(([x,y,w,h]) => {
+      const wc = parseInt((p.secondary||'#2a2a3a').replace('#',''),16);
+      const wall = this.scene.add.rectangle(x, y, w, h, wc).setDepth(2);
+      this.scene.physics.add.existing(wall, true);
+      this.walls.add(wall);
+    });
+
+    return {
+      walls: this.walls,
+      playerSpawn:  { x: W/4,     y: H/2 },
+      enemySpawns:  [
+        { x: W*3/4, y: H/2 },
+        { x: W/2,   y: H/4 },
+        { x: W/2,   y: H*3/4 },
+      ],
+      itemSpawns: [],
+      worldWidth: W, worldHeight: H,
+    };
+  }
+
+  get width()  { return this.worldW; }
+  get height() { return this.worldH; }
+}
 
 // ============================================================
 // PROCEDURAL PIXEL ART — drawn to canvas, used as textures
 // Sprint 3 will replace these with SD-generated spritesheets
 // ============================================================
-function generateTextures(scene) {
+function generateTextures(scene, useRealSprites = {}) {
   const p = MANIFEST.palette;
 
   // Floor tile — concrete grate pattern
@@ -109,7 +370,8 @@ function generateTextures(scene) {
   wallGfx.generateTexture('tile_wall', TILE, TILE);
   wallGfx.destroy();
 
-  // Player — 8px soldier silhouette, 16x16
+  // Player — skip if real sprite was loaded from manifest
+  if (!useRealSprites['player']) {
   // Spritesheet: 8 frames × 16px = 128px wide
   // frames 0-1: idle, 2-5: walk, 6-7: shoot
   const FRAMES = 8;
@@ -147,8 +409,10 @@ function generateTextures(scene) {
   for (let i = 0; i < FRAMES; i++) {
     playerTex.add(i, 0, i * TILE, 0, TILE, TILE);
   }
+  } // end if !useRealSprites['player']
 
-  // Enemy — 16x16 zombie, 4 frames walk cycle
+  // Enemy — skip if real sprite loaded
+  if (!useRealSprites['enemy']) {
   const enemyGfx = scene.make.graphics({ x: 0, y: 0, add: false });
   for (let f = 0; f < 4; f++) {
     const ox = f * TILE;
@@ -179,8 +443,10 @@ function generateTextures(scene) {
   for (let i = 0; i < 4; i++) {
     enemyTex.add(i, 0, i * TILE, 0, TILE, TILE);
   }
+  } // end if !useRealSprites['enemy']
 
-  // Boss — 32x32, 2 frames, drawn at double tile size
+  // Boss — skip if real sprite loaded
+  if (!useRealSprites['boss']) {
   const BOSS_SIZE = 32;
   const bossGfx = scene.make.graphics({ x: 0, y: 0, add: false });
   for (let f = 0; f < 2; f++) {
@@ -214,31 +480,61 @@ function generateTextures(scene) {
   for (let i = 0; i < 2; i++) {
     bossTex.add(i, 0, i * BOSS_SIZE, 0, BOSS_SIZE, BOSS_SIZE);
   }
+  } // end if !useRealSprites['boss']
 
-  // Bullet — tiny bright pixel
-  const bulletGfx = scene.make.graphics({ x: 0, y: 0, add: false });
-  bulletGfx.fillStyle(0xffcc00);
-  bulletGfx.fillRect(0, 1, 6, 2);
-  bulletGfx.fillStyle(0xffffff);
-  bulletGfx.fillRect(0, 1, 2, 2);
-  bulletGfx.generateTexture('bullet', 6, 4);
-  bulletGfx.destroy();
+  // Bullet, blood, flash — always procedural (not in manifest)
+  if (!scene.textures.exists('bullet')) {
+    const bulletGfx = scene.make.graphics({ x: 0, y: 0, add: false });
+    bulletGfx.fillStyle(0xffcc00);
+    bulletGfx.fillRect(0, 1, 6, 2);
+    bulletGfx.fillStyle(0xffffff);
+    bulletGfx.fillRect(0, 1, 2, 2);
+    bulletGfx.generateTexture('bullet', 6, 4);
+    bulletGfx.destroy();
+  }
 
-  // Blood splat particle
-  const bloodGfx = scene.make.graphics({ x: 0, y: 0, add: false });
-  bloodGfx.fillStyle(0xaa0000);
-  bloodGfx.fillRect(0, 0, 4, 4);
-  bloodGfx.generateTexture('blood', 4, 4);
-  bloodGfx.destroy();
+  if (!scene.textures.exists('blood')) {
+    const bloodGfx = scene.make.graphics({ x: 0, y: 0, add: false });
+    bloodGfx.fillStyle(0xaa0000);
+    bloodGfx.fillRect(0, 0, 4, 4);
+    bloodGfx.generateTexture('blood', 4, 4);
+    bloodGfx.destroy();
+  }
 
-  // Muzzle flash
-  const flashGfx = scene.make.graphics({ x: 0, y: 0, add: false });
-  flashGfx.fillStyle(0xffff00);
-  flashGfx.fillRect(0, 0, 6, 6);
-  flashGfx.fillStyle(0xffffff);
-  flashGfx.fillRect(2, 2, 2, 2);
-  flashGfx.generateTexture('flash', 6, 6);
-  flashGfx.destroy();
+  if (!scene.textures.exists('flash')) {
+    const flashGfx = scene.make.graphics({ x: 0, y: 0, add: false });
+    flashGfx.fillStyle(0xffff00);
+    flashGfx.fillRect(0, 0, 6, 6);
+    flashGfx.fillStyle(0xffffff);
+    flashGfx.fillRect(2, 2, 2, 2);
+    flashGfx.generateTexture('flash', 6, 6);
+    flashGfx.destroy();
+  }
+
+  // Floor and wall tiles — use real if available
+  if (!useRealSprites['tile_floor'] && !scene.textures.exists('tile_floor')) {
+    const floorGfx = scene.make.graphics({ x: 0, y: 0, add: false });
+    floorGfx.fillStyle(p.floor || 0x1a0e06);
+    floorGfx.fillRect(0, 0, TILE, TILE);
+    floorGfx.lineStyle(1, 0x0a0604, 0.8);
+    floorGfx.strokeRect(0, 0, TILE, TILE);
+    floorGfx.generateTexture('tile_floor', TILE, TILE);
+    floorGfx.destroy();
+  }
+
+  if (!useRealSprites['tile_wall'] && !scene.textures.exists('tile_wall')) {
+    const wallGfx = scene.make.graphics({ x: 0, y: 0, add: false });
+    wallGfx.fillStyle(p.wall || 0x0f0804);
+    wallGfx.fillRect(0, 0, TILE, TILE);
+    wallGfx.lineStyle(1, 0x050302, 1);
+    wallGfx.strokeRect(0, 0, TILE, TILE);
+    wallGfx.fillStyle(0x080503, 1);
+    wallGfx.fillRect(0, 7, TILE, 2);
+    wallGfx.fillRect(8, 0, 2, 7);
+    wallGfx.fillRect(4, 9, 2, 7);
+    wallGfx.generateTexture('tile_wall', TILE, TILE);
+    wallGfx.destroy();
+  }
 }
 
 // ============================================================
@@ -248,13 +544,86 @@ class PreloadScene extends Phaser.Scene {
   constructor() { super('PreloadScene'); }
 
   preload() {
-    // Fonts and external assets would load here in Sprint 3
-    // For now everything is generated procedurally
+    const sprites = MANIFEST?.assets?.sprites || {};
+    this._useRealSprites = {};
+
+    // Frame configs must match what sprite_gen.py actually generates
+    this._slotConfig = {
+      player:     { frames: 8, frameW: 16, totalW: 128, h: 16 },
+      enemy:      { frames: 4, frameW: 16, totalW: 64,  h: 16 },
+      boss:       { frames: 2, frameW: 32, totalW: 64,  h: 32 },
+      projectile: { frames: 2, frameW: 8,  totalW: 32,  h: 8  },
+      tile_floor: { frames: 1, frameW: 16, totalW: 16,  h: 16 },
+      tile_wall:  { frames: 1, frameW: 16, totalW: 16,  h: 16 },
+    };
+
+    for (const [slot, cfg] of Object.entries(this._slotConfig)) {
+      const url = sprites[`sprite_${slot}`] || sprites[slot];
+      if (url && url !== 'null' && url !== null) {
+        // Load as spritesheet with correct frame dimensions
+        this.load.spritesheet(slot, url, {
+          frameWidth:  cfg.frameW,
+          frameHeight: cfg.h,
+        });
+        this._useRealSprites[slot] = true;
+        console.log(`[Preload] Loading real sprite: ${slot} from ${url}`);
+      } else {
+        this._useRealSprites[slot] = false;
+      }
+    }
   }
 
   create() {
-    generateTextures(this);
-    this.scene.start('GameScene');
+    // For any real sprites loaded, verify frame 0 exists
+    // If not (SD generated a single image not a sheet), fall back to procedural
+    for (const [slot, useReal] of Object.entries(this._useRealSprites)) {
+      if (!useReal) continue;
+      const tex = this.textures.get(slot);
+      if (!tex || !tex.has(0)) {
+        console.warn(`[Preload] ${slot} has no frame 0 — falling back to procedural`);
+        this._useRealSprites[slot] = false;
+      }
+    }
+
+    generateTextures(this, this._useRealSprites);
+
+    // Register wave shooter animations (only if frames exist)
+    this._registerAnims();
+
+    // Route to correct scene
+    const template = MANIFEST?.template || 'wave_shooter';
+    const SCENE_ROUTES = {
+      wave_shooter:           'GameScene',
+      side_scroll_platformer: 'PlatformerScene',
+      top_down_action_rpg:    'TopDownRPGScene',
+      open_world_sandbox:     'OpenWorldScene',
+      turn_based_rpg:         'TurnOverworldScene',
+    };
+    this.scene.start(SCENE_ROUTES[template] || 'GameScene');
+  }
+
+  _registerAnims() {
+    const animDefs = [
+      { key: 'player_idle',  tex: 'player', frames: [0,1],       fps: 4,  loop: true  },
+      { key: 'player_walk',  tex: 'player', frames: [2,3,4,5],   fps: 8,  loop: true  },
+      { key: 'player_shoot', tex: 'player', frames: [6,7],        fps: 12, loop: false },
+      { key: 'enemy_walk',   tex: 'enemy',  frames: [0,1,2,3],   fps: 6,  loop: true  },
+      { key: 'boss_idle',    tex: 'boss',   frames: [0,1],        fps: 3,  loop: true  },
+    ];
+
+    for (const def of animDefs) {
+      if (this.anims.exists(def.key)) continue;
+      const tex = this.textures.get(def.tex);
+      // Only create anim if all required frames exist
+      const allFramesExist = def.frames.every(f => tex && tex.has(f));
+      if (!allFramesExist) continue;
+      this.anims.create({
+        key:       def.key,
+        frames:    this.anims.generateFrameNumbers(def.tex, { frames: def.frames }),
+        frameRate: def.fps,
+        repeat:    def.loop ? -1 : 0,
+      });
+    }
   }
 }
 
@@ -281,8 +650,14 @@ class GameScene extends Phaser.Scene {
     this.ammo       = cfg.player.max_ammo;
     this.hp         = cfg.player.max_hp;
 
-    // ── World ──────────────────────────────────────────────
-    this.buildRoom();
+    // ── World — TilemapRenderer ────────────────────────────
+    const tileRenderer = new TilemapRenderer(this);
+    const { walls, playerSpawn, enemySpawns: tileEnemySpawns,
+            itemSpawns, worldWidth, worldHeight } = tileRenderer.build();
+    this.walls       = walls;
+    this.tileEnemySpawns = tileEnemySpawns;
+    this.worldW      = worldWidth;
+    this.worldH      = worldHeight;
 
     // ── Groups ─────────────────────────────────────────────
     this.bullets  = this.physics.add.group();
@@ -290,32 +665,22 @@ class GameScene extends Phaser.Scene {
     this.particles = this.add.group();
 
     // ── Player ─────────────────────────────────────────────
-    this.player = this.physics.add.sprite(W / 2, H / 2, 'player');
+    this.player = this.physics.add.sprite(playerSpawn.x, playerSpawn.y, 'player');
     this.player.setCollideWorldBounds(true);
     this.player.body.setSize(10, 10);
     this.player.setDepth(10);
 
-    // Player animations
-    this.anims.create({
-      key: 'player_idle', frames: this.anims.generateFrameNumbers('player', { start: 0, end: 1 }),
-      frameRate: 4, repeat: -1
-    });
-    this.anims.create({
-      key: 'player_walk', frames: this.anims.generateFrameNumbers('player', { start: 2, end: 5 }),
-      frameRate: 8, repeat: -1
-    });
-    this.anims.create({
-      key: 'player_shoot', frames: this.anims.generateFrameNumbers('player', { start: 6, end: 7 }),
-      frameRate: 12, repeat: 0
-    });
-    this.anims.create({
-      key: 'enemy_walk', frames: this.anims.generateFrameNumbers('enemy', { start: 0, end: 3 }),
-      frameRate: 6, repeat: -1
-    });
-    this.anims.create({
-      key: 'boss_idle', frames: this.anims.generateFrameNumbers('boss', { start: 0, end: 1 }),
-      frameRate: 3, repeat: -1
-    });
+    // Player animations — guarded so PreloadScene registrations aren't duplicated
+    if (!this.anims.exists('player_idle'))
+      this.anims.create({ key: 'player_idle', frames: this.anims.generateFrameNumbers('player', { start: 0, end: 1 }), frameRate: 4, repeat: -1 });
+    if (!this.anims.exists('player_walk'))
+      this.anims.create({ key: 'player_walk', frames: this.anims.generateFrameNumbers('player', { start: 2, end: 5 }), frameRate: 8, repeat: -1 });
+    if (!this.anims.exists('player_shoot'))
+      this.anims.create({ key: 'player_shoot', frames: this.anims.generateFrameNumbers('player', { start: 6, end: 7 }), frameRate: 12, repeat: 0 });
+    if (!this.anims.exists('enemy_walk'))
+      this.anims.create({ key: 'enemy_walk', frames: this.anims.generateFrameNumbers('enemy', { start: 0, end: 3 }), frameRate: 6, repeat: -1 });
+    if (!this.anims.exists('boss_idle'))
+      this.anims.create({ key: 'boss_idle', frames: this.anims.generateFrameNumbers('boss', { start: 0, end: 1 }), frameRate: 3, repeat: -1 });
 
     this.player.play('player_idle');
 
@@ -350,48 +715,6 @@ class GameScene extends Phaser.Scene {
     this.time.delayedCall(1200, () => this.startWave());
   }
 
-  // ── WORLD BUILDER ──────────────────────────────────────────
-  buildRoom() {
-    const cols = Math.ceil(W / TILE);
-    const rows = Math.ceil(H / TILE);
-
-    // Floor
-    for (let x = 0; x < cols; x++) {
-      for (let y = 0; y < rows; y++) {
-        this.add.image(x * TILE + TILE / 2, y * TILE + TILE / 2, 'tile_floor').setDepth(0);
-      }
-    }
-
-    // Walls group
-    this.walls = this.physics.add.staticGroup();
-
-    // Border walls
-    for (let x = 0; x < cols; x++) {
-      this.walls.create(x * TILE + TILE / 2, TILE / 2,          'tile_wall').setDepth(1).refreshBody();
-      this.walls.create(x * TILE + TILE / 2, H - TILE / 2,      'tile_wall').setDepth(1).refreshBody();
-    }
-    for (let y = 1; y < rows - 1; y++) {
-      this.walls.create(TILE / 2,         y * TILE + TILE / 2,  'tile_wall').setDepth(1).refreshBody();
-      this.walls.create(W - TILE / 2,     y * TILE + TILE / 2,  'tile_wall').setDepth(1).refreshBody();
-    }
-
-    // Interior cover objects (4 pillars)
-    const pillars = [
-      [5, 4], [5, 13], [24, 4], [24, 13]
-    ];
-    pillars.forEach(([cx, cy]) => {
-      for (let dx = 0; dx < 2; dx++) {
-        for (let dy = 0; dy < 2; dy++) {
-          this.walls.create(
-            (cx + dx) * TILE + TILE / 2,
-            (cy + dy) * TILE + TILE / 2,
-            'tile_wall'
-          ).setDepth(2).refreshBody();
-        }
-      }
-    });
-  }
-
   // ── WAVE SYSTEM ────────────────────────────────────────────
   startWave() {
     const cfg = MANIFEST.game_config;
@@ -423,14 +746,15 @@ class GameScene extends Phaser.Scene {
     const cfg = MANIFEST.game_config;
     const waveScale = this.waveNum;
 
-    // Pick random edge spawn point
-    const edges = [
-      { x: Phaser.Math.Between(TILE * 2, W - TILE * 2), y: TILE * 2 },
-      { x: Phaser.Math.Between(TILE * 2, W - TILE * 2), y: H - TILE * 2 },
-      { x: TILE * 2,     y: Phaser.Math.Between(TILE * 2, H - TILE * 2) },
-      { x: W - TILE * 2, y: Phaser.Math.Between(TILE * 2, H - TILE * 2) }
-    ];
-    const spawn = Phaser.Utils.Array.GetRandom(edges);
+    // Pick from tilemap spawn points, or fall back to random edges
+    const spawn = this.tileEnemySpawns && this.tileEnemySpawns.length > 0
+      ? Phaser.Utils.Array.GetRandom(this.tileEnemySpawns)
+      : Phaser.Utils.Array.GetRandom([
+          { x: Phaser.Math.Between(TILE * 2, this.worldW - TILE * 2), y: TILE * 2 },
+          { x: Phaser.Math.Between(TILE * 2, this.worldW - TILE * 2), y: this.worldH - TILE * 2 },
+          { x: TILE * 2,     y: Phaser.Math.Between(TILE * 2, this.worldH - TILE * 2) },
+          { x: this.worldW - TILE * 2, y: Phaser.Math.Between(TILE * 2, this.worldH - TILE * 2) }
+        ]);
 
     let enemy;
     if (isBoss) {
@@ -637,7 +961,7 @@ class GameScene extends Phaser.Scene {
 
     // ── Destroy bullets that hit walls ──
     this.bullets.children.each(b => {
-      if (b.x < TILE || b.x > W - TILE || b.y < TILE || b.y > H - TILE) {
+      if (b.x < TILE || b.x > this.worldW - TILE || b.y < TILE || b.y > this.worldH - TILE) {
         b.destroy();
       }
     });
@@ -796,24 +1120,1238 @@ class HUDScene extends Phaser.Scene {
 }
 
 // ============================================================
-// PHASER GAME CONFIG
+// PLATFORMER GAME SCENE — Side Scroll Template
 // ============================================================
-const config = {
-  type: Phaser.AUTO,
-  width: W,
-  height: H,
-  backgroundColor: '#0d0500',
-  parent: 'game-container',
-  pixelArt: true,
-  antialias: false,
-  physics: {
-    default: 'arcade',
-    arcade: { gravity: { y: 0 }, debug: false }
-  },
-  scene: [PreloadScene, GameScene, HUDScene]
-};
+class PlatformerScene extends Phaser.Scene {
+  constructor() { super('PlatformerScene'); }
 
-const game = new Phaser.Game(config);
+  create() {
+    const cfg  = MANIFEST.game_config;
+    const p    = MANIFEST.palette;
+    const phys = cfg.physics || {};
+
+    this.score    = 0;
+    this.lives    = cfg.player?.lives || 3;
+    this.gameOver = false;
+    this._invincible = false;
+
+    // Enable gravity for platformer
+    this.physics.world.gravity.y = phys.gravity || 800;
+
+    // ── Build level from tilemap ──
+    const renderer = new TilemapRenderer(this);
+    const { walls, playerSpawn, enemySpawns, itemSpawns, worldWidth, worldHeight } = renderer.build();
+    this.platforms = walls;
+
+    // ── Sky background ──
+    const skyColor = typeof p.background === 'number'
+      ? p.background : parseInt((p.background || '#1a3a6a').replace('#',''), 16);
+    this.add.rectangle(worldWidth / 2, worldHeight / 2, worldWidth * 2, worldHeight, skyColor).setDepth(0);
+
+    // ── Pixel clouds for atmosphere ──
+    for (let i = 0; i < 12; i++) {
+      const cx = 80 + i * ((worldWidth - 160) / 11) + Phaser.Math.Between(-30, 30);
+      const cy = Phaser.Math.Between(30, 90);
+      this.add.rectangle(cx,    cy,    32, 12, 0xffffff, 0.7).setDepth(1);
+      this.add.rectangle(cx-10, cy+6,  12, 8,  0xffffff, 0.5).setDepth(1);
+      this.add.rectangle(cx+10, cy+6,  12, 8,  0xffffff, 0.5).setDepth(1);
+    }
+
+    // ── Player — use real sprite if available, else draw a shape ──
+    const spawnX = playerSpawn ? playerSpawn.x : 48;
+    const spawnY = playerSpawn ? playerSpawn.y : worldHeight - 48;
+    const useRealPlayer = MANIFEST?.assets?.sprites?.sprite_player;
+    if (useRealPlayer) {
+      this.player = this.physics.add.sprite(spawnX, spawnY, 'player', 0);
+      this.player.setScale(2);
+    } else {
+      const gfx = this.add.graphics();
+      gfx.fillStyle(0xff4400);
+      gfx.fillRect(0, 0, 16, 20);
+      gfx.generateTexture('player_rect', 16, 20);
+      gfx.destroy();
+      this.player = this.physics.add.sprite(spawnX, spawnY, 'player_rect');
+    }
+    this.player.setCollideWorldBounds(true);
+    this.player.body.setSize(14, 18);
+    this.player.setDepth(10);
+
+    // ── Enemies ───────────────────────────────────────────────
+    this.enemies = this.physics.add.group();
+    const spd = cfg.enemy?.base_speed || 40;
+    const enemyColor = parseInt((p.accent || '#ff2200').replace('#',''), 16);
+
+    enemySpawns.forEach(sp => {
+      const gfx = this.make.graphics({ x: 0, y: 0, add: false });
+      gfx.fillStyle(enemyColor);
+      gfx.fillRect(0, 0, 14, 14);
+      gfx.fillStyle(0xffffff);
+      gfx.fillRect(2, 2, 4, 4);
+      gfx.fillRect(8, 2, 4, 4);
+      gfx.fillStyle(0x000000);
+      gfx.fillRect(3, 3, 2, 2);
+      gfx.fillRect(9, 3, 2, 2);
+      if (!this.textures.exists('enemy_body')) {
+        gfx.generateTexture('enemy_body', 14, 14);
+      }
+      gfx.destroy();
+      const e = this.physics.add.sprite(sp.x, sp.y - TILE/2, 'enemy_body').setDepth(5);
+      e.body.setSize(14, 14);
+      e.hp = 1;
+      e.setVelocityX(spd);
+      this.enemies.add(e);
+    });
+
+    // ── Coins + Goal ──────────────────────────────────────────
+    this.coins = [];
+    this.goalX = null;
+
+    itemSpawns.forEach(sp => {
+      if (sp.tileType === 'goal') {
+        this.goalX = sp.x;
+        this.add.rectangle(sp.x, sp.y - TILE/2 - 4, 4, TILE + 8, 0xffffff).setDepth(5);
+        this.add.rectangle(sp.x + 8, sp.y - TILE - 8, 18, 10, 0xffff00).setDepth(5);
+        this.add.text(sp.x - 8, sp.y - TILE - 22, 'GOAL', {
+          fontSize: '8px', fontFamily: 'Courier New', color: '#ffff00'
+        }).setDepth(5);
+      } else {
+        const coinColor = parseInt((p.highlight || '#ffcc00').replace('#',''), 16);
+        const coin = this.add.circle(sp.x, sp.y, 5, coinColor).setDepth(4);
+        coin.collected = false;
+        this.coins.push(coin);
+      }
+    });
+
+    // ── Collisions ────────────────────────────────────────────
+    this.physics.add.collider(this.player, this.platforms, null, this._platformCollide, this);
+    this.physics.add.collider(this.enemies, this.platforms);
+    this.physics.add.overlap(this.player, this.enemies, this._hitEnemy, null, this);
+
+    // ── Camera ────────────────────────────────────────────────
+    this.cameras.main.setBounds(0, 0, worldWidth, worldHeight);
+    this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
+    this.cameras.main.setBackgroundColor(skyColor);
+
+    // ── Input ─────────────────────────────────────────────────
+    this.keys = this.input.keyboard.addKeys({
+      left:  Phaser.Input.Keyboard.KeyCodes.A,
+      right: Phaser.Input.Keyboard.KeyCodes.D,
+      jump:  Phaser.Input.Keyboard.KeyCodes.W,
+      left2: Phaser.Input.Keyboard.KeyCodes.LEFT,
+      right2:Phaser.Input.Keyboard.KeyCodes.RIGHT,
+      jump2: Phaser.Input.Keyboard.KeyCodes.UP,
+      jump3: Phaser.Input.Keyboard.KeyCodes.SPACE,
+    });
+
+    // ── HUD ───────────────────────────────────────────────────
+    this.scene.launch('PlatformerHUD', { gameScene: this });
+  }
+
+  _platformCollide(player, tile) {
+    if (tile.tileType === 'platform') {
+      return player.body.velocity.y >= 0;
+    }
+    return true;
+  }
+
+  _hitEnemy(player, enemy) {
+    if (player.body.velocity.y > 0 && player.y < enemy.y - 8) {
+      enemy.destroy();
+      this.score += 100;
+      this.events.emit('scoreChanged', this.score);
+      player.setVelocityY(-250);
+      this.cameras.main.shake(60, 0.005);
+    } else {
+      if (this._invincible) return;
+      this._invincible = true;
+      this.lives--;
+      this.events.emit('livesChanged', this.lives);
+      player.setTint(0xff0000);
+      this.time.delayedCall(1500, () => {
+        player.clearTint();
+        this._invincible = false;
+      });
+      if (this.lives <= 0) this._triggerGameOver();
+    }
+  }
+
+  _triggerGameOver() {
+    this.gameOver = true;
+    this.physics.pause();
+    this.events.emit('gameOver', this.score);
+  }
+
+  update() {
+    if (this.gameOver) return;
+    const k   = this.keys;
+    const spd = MANIFEST.game_config.physics?.player_speed || 160;
+    const worldW = this.platforms ? this.cameras.main._bounds.x + this.cameras.main._bounds.width : W * 4;
+
+    if (k.left.isDown || k.left2.isDown) {
+      this.player.setVelocityX(-spd);
+      this.player.setFlipX(true);
+    } else if (k.right.isDown || k.right2.isDown) {
+      this.player.setVelocityX(spd);
+      this.player.setFlipX(false);
+    } else {
+      this.player.setVelocityX(0);
+    }
+
+    const onGround = this.player.body.blocked.down;
+    if ((k.jump.isDown || k.jump2.isDown || k.jump3.isDown) && onGround) {
+      this.player.setVelocityY(MANIFEST.game_config.physics?.jump_velocity || -420);
+    }
+
+    this.enemies.children.each(e => {
+      if (!e.active) return;
+      if (e.body.blocked.right || e.x > worldW - 20) {
+        e.setVelocityX(-Math.abs(e.body.velocity.x));
+        e.setFlipX(true);
+      }
+      if (e.body.blocked.left || e.x < 20) {
+        e.setVelocityX(Math.abs(e.body.velocity.x));
+        e.setFlipX(false);
+      }
+    });
+
+    const px = this.player.x, py = this.player.y;
+    this.coins.forEach(coin => {
+      if (coin.collected) return;
+      if (Math.abs(coin.x - px) < 16 && Math.abs(coin.y - py) < 16) {
+        coin.setVisible(false);
+        this.score += 10;
+        this.events.emit('scoreChanged', this.score);
+        coin.collected = true;
+      }
+    });
+
+    if (this.goalX !== null && this.player.x >= this.goalX - 20) {
+      this.score += 500;
+      this.events.emit('levelComplete', this.score);
+      this.gameOver = true;
+      this.physics.pause();
+    }
+  }
+}
+
+// ============================================================
+// PLATFORMER HUD SCENE
+// ============================================================
+class PlatformerHUD extends Phaser.Scene {
+  constructor() { super('PlatformerHUD'); }
+  init(data) { this.gameScene = data.gameScene; }
+
+  create() {
+    const p = MANIFEST.palette;
+    const hudColor = p.hud_text || '#ffcc00';
+
+    this.add.rectangle(W/2, 10, W, 20, 0x000000, 0.75).setScrollFactor(0).setDepth(20);
+
+    this.livesText = this.add.text(8, 4, `LIVES: ${this.gameScene.lives}`, {
+      fontSize: '9px', fontFamily: 'Courier New', color: hudColor
+    }).setScrollFactor(0).setDepth(21);
+
+    this.scoreText = this.add.text(W/2 - 40, 4, 'SCORE: 0', {
+      fontSize: '9px', fontFamily: 'Courier New', color: hudColor
+    }).setScrollFactor(0).setDepth(21);
+
+    this.add.text(W - 80, 4, 'A/D + W/SPACE', {
+      fontSize: '7px', fontFamily: 'Courier New', color: '#664422'
+    }).setScrollFactor(0).setDepth(21);
+
+    const gs = this.gameScene;
+    gs.events.on('livesChanged', v => this.livesText.setText(`LIVES: ${v}`));
+    gs.events.on('scoreChanged', v => this.scoreText.setText(`SCORE: ${v}`));
+
+    gs.events.on('levelComplete', score => {
+      this.add.rectangle(W/2, H/2, W, H, 0x000000, 0.7).setScrollFactor(0).setDepth(40);
+      this.add.text(W/2, H/2-20, 'LEVEL CLEAR!', {
+        fontSize: '22px', fontFamily: 'Courier New', color: '#44ff44',
+        stroke: '#000', strokeThickness: 3
+      }).setScrollFactor(0).setDepth(41).setOrigin(0.5);
+      this.add.text(W/2, H/2+10, `SCORE: ${score}`, {
+        fontSize: '12px', fontFamily: 'Courier New', color: '#ffcc00'
+      }).setScrollFactor(0).setDepth(41).setOrigin(0.5);
+      this.add.text(W/2, H/2+30, 'REFRESH TO RETRY', {
+        fontSize: '9px', fontFamily: 'Courier New', color: '#666'
+      }).setScrollFactor(0).setDepth(41).setOrigin(0.5);
+    });
+
+    gs.events.on('gameOver', score => {
+      this.add.rectangle(W/2, H/2, W, H, 0x000000, 0.7).setScrollFactor(0).setDepth(40);
+      this.add.text(W/2, H/2-20, 'GAME OVER', {
+        fontSize: '22px', fontFamily: 'Courier New', color: '#ff0000',
+        stroke: '#000', strokeThickness: 3
+      }).setScrollFactor(0).setDepth(41).setOrigin(0.5);
+      this.add.text(W/2, H/2+10, `FINAL SCORE: ${score}`, {
+        fontSize: '11px', fontFamily: 'Courier New', color: '#ffcc00'
+      }).setScrollFactor(0).setDepth(41).setOrigin(0.5);
+    });
+  }
+}
+
+// ============================================================
+// TOP DOWN ACTION RPG SCENE — Kingdom Hearts / Zelda style
+// ============================================================
+class TopDownRPGScene extends Phaser.Scene {
+  constructor() { super('TopDownRPGScene'); }
+
+  create() {
+    const cfg = MANIFEST.game_config;
+    const p   = MANIFEST.palette;
+    const bgColor = typeof p.background === 'number' ? p.background
+      : parseInt((p.background || '#0a0a1a').replace('#',''), 16);
+
+    this.hp      = cfg.combat?.max_hp    || 120;
+    this.maxHp   = this.hp;
+    this.mp      = cfg.combat?.max_mp    || 60;
+    this.maxMp   = this.mp;
+    this.score   = 0;
+    this.gameOver = false;
+    this._attackCooldown = 0;
+    this._dodgeCooldown  = 0;
+
+    // ── World — TilemapRenderer ────────────────────────────
+    const tileRenderer = new TilemapRenderer(this);
+    const { walls, playerSpawn, enemySpawns: tileEnemySpawns,
+            itemSpawns, worldWidth, worldHeight } = tileRenderer.build();
+    this.walls       = walls;
+    this.worldW      = worldWidth;
+    this.worldH      = worldHeight;
+
+    // ── Player ───────────────────────────────────────────────
+    this.player = this.physics.add.sprite(playerSpawn.x, playerSpawn.y, 'player', 0);
+    this.player.setCollideWorldBounds(true);
+    this.player.body.setSize(12, 12);
+    this.player.setDepth(10).setScale(1.5);
+    if (this.anims.exists('player_idle')) this.player.play('player_idle');
+
+    // ── Enemies ───────────────────────────────────────────────
+    this.enemies = this.physics.add.group();
+    const spd = cfg.enemy?.base_speed || 45;
+    const hp  = cfg.enemy?.base_hp    || 50;
+    (tileEnemySpawns.length > 0 ? tileEnemySpawns
+      : [{ x: 80, y: 80 }, { x: 400, y: 80 }, { x: 80, y: 240 }, { x: 400, y: 240 }, { x: worldWidth/2, y: worldHeight/2 }]
+    ).forEach(({ x, y }) => {
+      const e = this.enemies.create(x, y, 'enemy', 0);
+      e.setDepth(5).setScale(1.2);
+      e.body.setSize(12, 12);
+      e.hp = hp; e.maxHp = hp; e.speed = spd;
+      e.lastDamage = 0;
+      if (this.anims.exists('enemy_walk')) e.play('enemy_walk');
+    });
+
+    // ── Collisions ────────────────────────────────────────────
+    this.physics.add.collider(this.player,  this.walls);
+    this.physics.add.collider(this.enemies, this.walls);
+    this.physics.add.overlap(this.player, this.enemies, this._touchEnemy, null, this);
+
+    // ── Input ─────────────────────────────────────────────────
+    this.keys = this.input.keyboard.addKeys({
+      up:    Phaser.Input.Keyboard.KeyCodes.W,
+      down:  Phaser.Input.Keyboard.KeyCodes.S,
+      left:  Phaser.Input.Keyboard.KeyCodes.A,
+      right: Phaser.Input.Keyboard.KeyCodes.D,
+      attack:Phaser.Input.Keyboard.KeyCodes.SPACE,
+      dodge: Phaser.Input.Keyboard.KeyCodes.SHIFT,
+      magic: Phaser.Input.Keyboard.KeyCodes.E,
+    });
+
+    this.scene.launch('TopDownHUD', { gameScene: this });
+  }
+
+  _touchEnemy(player, enemy) {
+    const now = this.time.now;
+    if (now - enemy.lastDamage < 800) return;
+    enemy.lastDamage = now;
+    const dmg = MANIFEST.game_config.enemy?.damage || 15;
+    this.hp -= dmg;
+    this.events.emit('hpChanged', this.hp);
+    this.cameras.main.shake(80, 0.008);
+    player.setTint(0xff0000);
+    this.time.delayedCall(150, () => player.clearTint());
+    if (this.hp <= 0) { this.gameOver = true; this.physics.pause(); this.events.emit('gameOver', this.score); }
+  }
+
+  update(time) {
+    if (this.gameOver) return;
+    const k   = this.keys;
+    const spd = MANIFEST.game_config.physics?.player_speed || 110;
+    let vx = 0, vy = 0;
+    if (k.left.isDown)  vx = -spd;
+    if (k.right.isDown) vx =  spd;
+    if (k.up.isDown)    vy = -spd;
+    if (k.down.isDown)  vy =  spd;
+    if (vx && vy) { vx *= 0.707; vy *= 0.707; }
+    this.player.body.setVelocity(vx, vy);
+    if (vx || vy) {
+      if (this.anims.exists('player_walk')) this.player.play('player_walk', true);
+      if (vx < 0) this.player.setFlipX(true);
+      else if (vx > 0) this.player.setFlipX(false);
+    } else {
+      if (this.anims.exists('player_idle')) this.player.play('player_idle', true);
+    }
+
+    // Attack — damages all nearby enemies
+    if (Phaser.Input.Keyboard.JustDown(k.attack) && time > this._attackCooldown) {
+      this._attackCooldown = time + 400;
+      const atk = MANIFEST.game_config.combat?.attack_damage || 25;
+      const range = MANIFEST.game_config.combat?.attack_range || 50;
+      if (this.anims.exists('player_shoot')) this.player.play('player_shoot', true);
+      this.cameras.main.shake(60, 0.005);
+      this.enemies.children.each(e => {
+        if (!e.active) return;
+        const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, e.x, e.y);
+        if (dist < range) {
+          e.hp -= atk;
+          e.setTint(0xff0000);
+          this.time.delayedCall(100, () => { if (e.active) e.clearTint(); });
+          if (e.hp <= 0) { this.score += 100; this.events.emit('scoreChanged', this.score); e.destroy(); }
+        }
+      });
+    }
+
+    // Magic — costs MP, longer range
+    if (Phaser.Input.Keyboard.JustDown(k.magic) && this.mp >= 10) {
+      this.mp -= 10;
+      this.events.emit('mpChanged', this.mp);
+      const mgk = MANIFEST.game_config.combat?.base_magic || 30;
+      this.enemies.children.each(e => {
+        if (!e.active) return;
+        const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, e.x, e.y);
+        if (dist < 100) {
+          e.hp -= mgk;
+          e.setTint(0x8800ff);
+          this.time.delayedCall(150, () => { if (e.active) e.clearTint(); });
+          if (e.hp <= 0) { this.score += 150; this.events.emit('scoreChanged', this.score); e.destroy(); }
+        }
+      });
+    }
+
+    // Enemy AI — chase player
+    this.enemies.children.each(e => {
+      if (!e.active) return;
+      const angle = Phaser.Math.Angle.Between(e.x, e.y, this.player.x, this.player.y);
+      e.body.setVelocity(Math.cos(angle) * e.speed, Math.sin(angle) * e.speed);
+      e.setFlipX(this.player.x < e.x);
+    });
+
+    // Win condition — all enemies defeated
+    if (this.enemies.countActive(true) === 0 && !this.gameOver) {
+      this.gameOver = true;
+      this.score += 500;
+      this.events.emit('roomClear', this.score);
+    }
+  }
+}
+
+class TopDownHUD extends Phaser.Scene {
+  constructor() { super('TopDownHUD'); }
+  init(data) { this.gs = data.gameScene; }
+  create() {
+    const hc = MANIFEST.palette.hud_text || '#ff6600';
+    this.add.rectangle(W/2, 11, W, 22, 0x000000, 0.8).setDepth(20);
+    this.add.text(6, 4, 'HP', { fontSize: '8px', fontFamily: 'Courier New', color: '#662200' }).setDepth(21);
+    this.hpBg  = this.add.rectangle(28, 11, 80, 8, 0x440000).setDepth(21).setOrigin(0,0.5);
+    this.hpBar = this.add.rectangle(28, 11, 80, 8, 0xff2200).setDepth(22).setOrigin(0,0.5);
+    this.add.text(115, 4, 'MP', { fontSize: '8px', fontFamily: 'Courier New', color: '#220044' }).setDepth(21);
+    this.mpBg  = this.add.rectangle(136, 11, 60, 8, 0x110022).setDepth(21).setOrigin(0,0.5);
+    this.mpBar = this.add.rectangle(136, 11, 60, 8, 0x8800ff).setDepth(22).setOrigin(0,0.5);
+    this.scoreText = this.add.text(W-100, 4, 'SCORE 0', { fontSize: '8px', fontFamily: 'Courier New', color: hc }).setDepth(21);
+    this.add.text(W/2-60, 4, 'SPACE-ATK  E-MAGIC', { fontSize: '7px', fontFamily: 'Courier New', color: '#444' }).setDepth(21);
+
+    const gs = this.gs;
+    const maxHp = gs.maxHp, maxMp = gs.maxMp;
+    gs.events.on('hpChanged', v => { this.hpBar.width = 80 * Math.max(0,v)/maxHp; });
+    gs.events.on('mpChanged', v => { this.mpBar.width = 60 * Math.max(0,v)/maxMp; });
+    gs.events.on('scoreChanged', v => this.scoreText.setText(`SCORE ${v}`));
+    gs.events.on('roomClear', score => this._endScreen('ROOM CLEAR!', '#44ff44', score));
+    gs.events.on('gameOver', score => this._endScreen('YOU DIED', '#ff0000', score));
+  }
+  _endScreen(title, color, score) {
+    this.add.rectangle(W/2,H/2,W,H,0x000000,0.75).setDepth(40);
+    this.add.text(W/2,H/2-20, title, { fontSize:'22px', fontFamily:'Courier New', color, stroke:'#000', strokeThickness:3 }).setDepth(41).setOrigin(0.5);
+    this.add.text(W/2,H/2+8, `SCORE: ${score}`, { fontSize:'11px', fontFamily:'Courier New', color:'#ffcc00' }).setDepth(41).setOrigin(0.5);
+    this.add.text(W/2,H/2+26, 'REFRESH TO RETRY', { fontSize:'9px', fontFamily:'Courier New', color:'#666' }).setDepth(41).setOrigin(0.5);
+  }
+}
+
+// ============================================================
+// OPEN WORLD SANDBOX SCENE — GTA style top-down
+// ============================================================
+class OpenWorldScene extends Phaser.Scene {
+  constructor() { super('OpenWorldScene'); }
+
+  create() {
+    const cfg = MANIFEST.game_config;
+    const p   = MANIFEST.palette;
+    this.hp      = cfg.player?.max_hp || 100;
+    this.cash    = cfg.player?.cash   || 0;
+    this.wanted  = 0;
+    this.maxWanted = cfg.world?.wanted_max || 5;
+    this.gameOver  = false;
+    this._damageCooldown = 0;
+
+    // ── World — TilemapRenderer ────────────────────────────
+    const tileRenderer = new TilemapRenderer(this);
+    const { walls, playerSpawn, enemySpawns: tileEnemySpawns,
+            itemSpawns, worldWidth, worldHeight } = tileRenderer.build();
+    this.walls  = walls;
+    this.worldW = worldWidth;
+    this.worldH = worldHeight;
+
+    // ── NPCs ──────────────────────────────────────────────────
+    this.npcs = this.physics.add.group();
+    const npcPositions = tileEnemySpawns.length > 0 ? tileEnemySpawns
+      : Array.from({ length: cfg.world?.npc_count || 8 }, () => ({
+          x: Phaser.Math.Between(60, worldWidth - 60),
+          y: Phaser.Math.Between(60, worldHeight - 60),
+        }));
+    npcPositions.forEach(({ x, y }) => {
+      const npc = this.npcs.create(x, y, 'enemy', 0);
+      npc.setDepth(5).setScale(0.9);
+      npc.body.setSize(10, 10);
+      npc.isHostile = false;
+      npc.wanderAngle = Math.random() * Math.PI * 2;
+      npc.wanderTimer = 0;
+    });
+
+    // ── Player ─────────────────────────────────────────────────
+    this.player = this.physics.add.sprite(playerSpawn.x, playerSpawn.y, 'player', 0);
+    this.player.setCollideWorldBounds(true);
+    this.player.body.setSize(12,12);
+    this.player.setDepth(10).setScale(1.5);
+    if (this.anims.exists('player_idle')) this.player.play('player_idle');
+
+    // ── Mission marker ─────────────────────────────────────────
+    if (itemSpawns.length > 0) {
+      const m = Phaser.Utils.Array.GetRandom(itemSpawns);
+      this.missionX = m.x; this.missionY = m.y;
+    } else {
+      this.missionX = worldWidth * 0.75; this.missionY = worldHeight * 0.25;
+    }
+    this.missionMarker = this.add.text(this.missionX, this.missionY, '★',
+      { fontSize:'18px', color:'#ffff00' }).setDepth(8).setOrigin(0.5);
+    this.add.text(this.missionX, this.missionY-16, 'MISSION',
+      { fontSize:'7px', fontFamily:'Courier New', color:'#ffff00' }).setDepth(8).setOrigin(0.5);
+
+    // ── Physics ────────────────────────────────────────────────
+    this.physics.add.collider(this.player, this.walls);
+    this.physics.add.collider(this.npcs,   this.walls);
+    this.physics.add.overlap(this.player, this.npcs, this._touchNPC, null, this);
+
+    // ── Camera ─────────────────────────────────────────────────
+    this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
+
+    // ── Input ──────────────────────────────────────────────────
+    this.keys = this.input.keyboard.addKeys({
+      up:    Phaser.Input.Keyboard.KeyCodes.W,
+      down:  Phaser.Input.Keyboard.KeyCodes.S,
+      left:  Phaser.Input.Keyboard.KeyCodes.A,
+      right: Phaser.Input.Keyboard.KeyCodes.D,
+      attack:Phaser.Input.Keyboard.KeyCodes.SPACE,
+    });
+
+    this.scene.launch('OpenWorldHUD', { gameScene: this });
+  }
+
+  _touchNPC(player, npc) {
+    if (!npc.isHostile) return;
+    const now = this.time.now;
+    if (now - this._damageCooldown < 600) return;
+    this._damageCooldown = now;
+    this.hp -= 10;
+    this.events.emit('hpChanged', this.hp);
+    if (this.hp <= 0) { this.gameOver = true; this.physics.pause(); this.events.emit('gameOver', this.cash); }
+  }
+
+  update(time) {
+    if (this.gameOver) return;
+    const spd = MANIFEST.game_config.physics?.player_speed || 100;
+    const k   = this.keys;
+    let vx = 0, vy = 0;
+    if (k.left.isDown)  vx = -spd;
+    if (k.right.isDown) vx =  spd;
+    if (k.up.isDown)    vy = -spd;
+    if (k.down.isDown)  vy =  spd;
+    if (vx && vy) { vx *= 0.707; vy *= 0.707; }
+    this.player.body.setVelocity(vx, vy);
+    if (vx || vy) {
+      if (this.anims.exists('player_walk')) this.player.play('player_walk', true);
+      if (vx < 0) this.player.setFlipX(true);
+      else if (vx > 0) this.player.setFlipX(false);
+    } else {
+      if (this.anims.exists('player_idle')) this.player.play('player_idle', true);
+    }
+
+    // Attack NPCs — increases wanted level
+    if (Phaser.Input.Keyboard.JustDown(k.attack)) {
+      this.npcs.children.each(npc => {
+        if (!npc.active) return;
+        if (Phaser.Math.Distance.Between(this.player.x, this.player.y, npc.x, npc.y) < 40) {
+          npc.destroy();
+          this.wanted = Math.min(this.maxWanted, this.wanted + 1);
+          this.events.emit('wantedChanged', this.wanted);
+        }
+      });
+    }
+
+    // NPC wander / chase
+    this.npcs.children.each(npc => {
+      if (!npc.active) return;
+      const dist = Phaser.Math.Distance.Between(npc.x, npc.y, this.player.x, this.player.y);
+      if (this.wanted > 0 && dist < 200) {
+        npc.isHostile = true;
+        const angle = Phaser.Math.Angle.Between(npc.x, npc.y, this.player.x, this.player.y);
+        npc.body.setVelocity(Math.cos(angle)*70, Math.sin(angle)*70);
+      } else {
+        npc.isHostile = false;
+        npc.wanderTimer -= 16;
+        if (npc.wanderTimer <= 0) { npc.wanderAngle += (Math.random()-0.5)*1.5; npc.wanderTimer = 1000; }
+        npc.body.setVelocity(Math.cos(npc.wanderAngle)*25, Math.sin(npc.wanderAngle)*25);
+      }
+    });
+
+    // Mission check
+    if (Phaser.Math.Distance.Between(this.player.x, this.player.y, this.missionX, this.missionY) < 30) {
+      this.cash += 500;
+      this.events.emit('cashChanged', this.cash);
+      this.missionX = Phaser.Math.Between(100, this.worldW - 100);
+      this.missionY = Phaser.Math.Between(100, this.worldH - 100);
+      this.missionMarker.setPosition(this.missionX, this.missionY);
+    }
+  }
+}
+
+class OpenWorldHUD extends Phaser.Scene {
+  constructor() { super('OpenWorldHUD'); }
+  init(data) { this.gs = data.gameScene; }
+  create() {
+    const hc = MANIFEST.palette.hud_text || '#ffcc00';
+    this.add.rectangle(W/2, 11, W, 22, 0x000000, 0.8).setDepth(20);
+    this.hpBar = this.add.rectangle(50, 11, 80, 8, 0xff2200).setDepth(22).setOrigin(0,0.5);
+    this.add.rectangle(50, 11, 80, 8, 0x440000).setDepth(21).setOrigin(0,0.5);
+    this.hpBar.setDepth(22);
+    this.cashText   = this.add.text(W/2-40, 4, '$0', { fontSize:'9px', fontFamily:'Courier New', color:'#44ff44' }).setDepth(21);
+    this.wantedText = this.add.text(W-80, 4, '★☆☆☆☆', { fontSize:'9px', fontFamily:'Courier New', color:'#ffcc00' }).setDepth(21);
+    this.add.text(6, 4, 'HP', { fontSize:'7px', fontFamily:'Courier New', color:'#662200' }).setDepth(21);
+    this.add.text(W/2-80, 4, 'SPACE-ATTACK', { fontSize:'7px', fontFamily:'Courier New', color:'#444' }).setDepth(21);
+
+    const gs = this.gs;
+    gs.events.on('hpChanged',     v => { this.hpBar.width = 80 * Math.max(0,v) / 100; });
+    gs.events.on('cashChanged',   v => this.cashText.setText(`$${v}`));
+    gs.events.on('wantedChanged', v => this.wantedText.setText('★'.repeat(v) + '☆'.repeat(5-v)));
+    gs.events.on('gameOver', score => {
+      this.add.rectangle(W/2,H/2,W,H,0x000000,0.75).setDepth(40);
+      this.add.text(W/2,H/2-15,'BUSTED!',{fontSize:'24px',fontFamily:'Courier New',color:'#ff0000',stroke:'#000',strokeThickness:3}).setDepth(41).setOrigin(0.5);
+      this.add.text(W/2,H/2+10,`CASH: $${score}`,{fontSize:'11px',fontFamily:'Courier New',color:'#ffcc00'}).setDepth(41).setOrigin(0.5);
+    });
+  }
+}
+
+// ============================================================
+// TURN-BASED RPG OVERWORLD — Explore tilemap, random encounters
+// ============================================================
+class TurnOverworldScene extends Phaser.Scene {
+  constructor() { super('TurnOverworldScene'); }
+
+  init(data) {
+    // Restore state if returning from battle
+    this.playerHp   = data?.playerHp   || MANIFEST.game_config.battle?.player_hp  || 80;
+    this.playerMp   = data?.playerMp   || MANIFEST.game_config.battle?.player_mp  || 40;
+    this.maxHp      = this.playerHp;
+    this.maxMp      = this.playerMp;
+    this.overworldScore = data?.overworldScore || 0;
+    this.encounters = data?.encounters || 0;
+    this.maxEncounters = MANIFEST.game_config.battle?.max_encounters || 5;
+    this.returnX    = data?.returnX;
+    this.returnY    = data?.returnY;
+  }
+
+  create() {
+    const cfg = MANIFEST.game_config;
+    const p   = MANIFEST.palette;
+
+    this.gameOver = false;
+    this._stepCounter = 0;
+    this._encounterCooldown = 0;
+
+    // ── World — TilemapRenderer ────────────────────────────
+    const tileRenderer = new TilemapRenderer(this);
+    const { walls, playerSpawn, enemySpawns: tileEnemySpawns, itemSpawns, worldWidth, worldHeight } = tileRenderer.build();
+    this.walls  = walls;
+    this.worldW = worldWidth;
+    this.worldH = worldHeight;
+    this.tileGrid = MANIFEST?.tilemap?.grid;
+
+    // ── Player ───────────────────────────────────────────────
+    const startX = this.returnX || playerSpawn.x;
+    const startY = this.returnY || playerSpawn.y;
+    this.player = this.physics.add.sprite(startX, startY, 'player', 0);
+    this.player.setCollideWorldBounds(true);
+    this.player.body.setSize(10, 10);
+    this.player.setDepth(10).setScale(1.2);
+    if (this.anims.exists('player_idle')) this.player.play('player_idle');
+
+    // ── Collision ──────────────────────────────────────────────
+    this.physics.add.collider(this.player, this.walls);
+
+    // ── Input ─────────────────────────────────────────────────
+    this.keys = this.input.keyboard.addKeys({
+      up:    Phaser.Input.Keyboard.KeyCodes.W,
+      down:  Phaser.Input.Keyboard.KeyCodes.S,
+      left:  Phaser.Input.Keyboard.KeyCodes.A,
+      right: Phaser.Input.Keyboard.KeyCodes.D,
+      interact: Phaser.Input.Keyboard.KeyCodes.SPACE,
+    });
+
+    // ── HUD ────────────────────────────────────────────────────
+    this.scene.launch('TurnOverworldHUD', { gameScene: this });
+
+    // ── Heal if entering from fresh start ───────────────────────
+    if (!this.returnX) {
+      this.playerHp = this.maxHp;
+      this.playerMp = this.maxMp;
+    }
+  }
+
+  update() {
+    if (this.gameOver) return;
+
+    const spd = MANIFEST.game_config.physics?.player_speed || 90;
+    const k   = this.keys;
+    let vx = 0, vy = 0;
+    if (k.left.isDown)  vx = -spd;
+    if (k.right.isDown) vx =  spd;
+    if (k.up.isDown)    vy = -spd;
+    if (k.down.isDown)  vy =  spd;
+    if (vx && vy) { vx *= 0.707; vy *= 0.707; }
+    this.player.body.setVelocity(vx, vy);
+    if (vx || vy) {
+      if (this.anims.exists('player_walk')) this.player.play('player_walk', true);
+      if (vx < 0) this.player.setFlipX(true);
+      else if (vx > 0) this.player.setFlipX(false);
+      this._stepCounter++;
+    } else {
+      if (this.anims.exists('player_idle')) this.player.play('player_idle', true);
+    }
+
+    // ── Check tile under player ─────────────────────────────
+    if (!this.tileGrid) return;
+    const tx = Math.floor(this.player.x / TILE);
+    const ty = Math.floor(this.player.y / TILE);
+    const tileId = this.tileGrid[ty]?.[tx];
+    if (!tileId) return;
+
+    // ── Tall grass — random encounter ────────────────────────
+    const tileDefs = MANIFEST?.tilemap?.tile_defs;
+    if (tileDefs?.[tileId]?.spawn_enemy) {
+      const encounterChance = 0.015;
+      if (Math.random() < encounterChance && this.time.now > this._encounterCooldown) {
+        this._encounterCooldown = this.time.now + 3000;
+        this._triggerBattle();
+        return;
+      }
+    }
+
+    // ── Town / item tiles — heal ─────────────────────────────
+    if (tileDefs?.[tileId]?.spawn_item && Phaser.Input.Keyboard.JustDown(k.interact)) {
+      this.playerHp = this.maxHp;
+      this.playerMp = this.maxMp;
+      this.events.emit('healed');
+    }
+  }
+
+  _triggerBattle() {
+    const cfg = MANIFEST.game_config;
+    const scale = 1 + this.encounters * 0.3;
+    const enemyHp = Math.floor((cfg.enemy?.base_hp || 60) * scale);
+    this.scene.start('TurnBasedScene', {
+      fromOverworld: true,
+      playerHp: this.playerHp,
+      playerMp: this.playerMp,
+      maxHp: this.maxHp,
+      maxMp: this.maxMp,
+      overworldScore: this.overworldScore,
+      encounters: this.encounters,
+      maxEncounters: this.maxEncounters,
+      returnX: this.player.x,
+      returnY: this.player.y,
+      enemyHp,
+      battleNum: this.encounters + 1,
+    });
+  }
+}
+
+class TurnOverworldHUD extends Phaser.Scene {
+  constructor() { super('TurnOverworldHUD'); }
+  init(data) { this.gs = data.gameScene; }
+  create() {
+    const hc = MANIFEST.palette.hud_text || '#ffcc00';
+    this.add.rectangle(W/2, 11, W, 22, 0x000000, 0.8).setDepth(20);
+    this.add.text(6, 4, 'HP', { fontSize:'7px', fontFamily:'Courier New', color:'#662200' }).setDepth(21);
+    this.hpBar = this.add.rectangle(28, 11, 80, 8, 0xff2200).setDepth(22).setOrigin(0,0.5);
+    this.add.rectangle(28, 11, 80, 8, 0x440000).setDepth(21).setOrigin(0,0.5);
+    this.add.text(115, 4, 'MP', { fontSize:'7px', fontFamily:'Courier New', color:'#220044' }).setDepth(21);
+    this.mpBar = this.add.rectangle(136, 11, 60, 8, 0x8800ff).setDepth(22).setOrigin(0,0.5);
+    this.add.rectangle(136, 11, 60, 8, 0x110022).setDepth(21).setOrigin(0,0.5);
+    this.encText = this.add.text(W-90, 4, 'ENC 0/5', { fontSize:'8px', fontFamily:'Courier New', color:hc }).setDepth(21);
+    this.add.text(W/2-70, 4, 'WASD-MOVE  SPACE-INTERACT', { fontSize:'6px', fontFamily:'Courier New', color:'#444' }).setDepth(21);
+
+    const gs = this.gs;
+    gs.events.on('healed', () => {
+      this.hpBar.width = 80;
+      this.mpBar.width = 60;
+    });
+    this.time.addEvent({ delay: 100, loop: true, callback: () => {
+      if (!gs.gameOver) {
+        this.hpBar.width = 80 * Math.max(0, gs.playerHp) / gs.maxHp;
+        this.mpBar.width = 60 * Math.max(0, gs.playerMp) / gs.maxMp;
+        this.encText.setText(`ENC ${gs.encounters}/${gs.maxEncounters}`);
+      }
+    }});
+  }
+}
+
+// ============================================================
+// TURN BASED BATTLE SCENE — Pokemon / Final Fantasy style
+// ============================================================
+class TurnBasedScene extends Phaser.Scene {
+  constructor() { super('TurnBasedScene'); }
+
+  init(data) {
+    this._initData = data || {};
+    this.fromOverworld = this._initData.fromOverworld || false;
+    if (this.fromOverworld) {
+      this.playerHp  = this._initData.playerHp;
+      this.playerMp  = this._initData.playerMp;
+      this.maxHp     = this._initData.maxHp;
+      this.maxMp     = this._initData.maxMp;
+      this.overworldScore = this._initData.overworldScore || 0;
+      this.encounters= this._initData.encounters || 0;
+      this.maxEncounters = this._initData.maxEncounters || 5;
+      this.returnX   = this._initData.returnX;
+      this.returnY   = this._initData.returnY;
+      this.enemyHp   = this._initData.enemyHp;
+    }
+  }
+
+  create() {
+    const cfg  = MANIFEST.game_config;
+    const p    = MANIFEST.palette;
+    const bcfg = cfg.battle || {};
+
+    // Battle state
+    if (!this.fromOverworld) {
+      this.playerHp  = bcfg.player_hp  || 80;
+      this.playerMp  = bcfg.player_mp  || 40;
+      this.maxHp     = this.playerHp;
+      this.maxMp     = this.playerMp;
+      this.enemyHp   = cfg.enemy?.base_hp || 60;
+      this.overworldScore = 0;
+      this.encounters= 0;
+      this.maxEncounters= 5;
+    }
+    this.enemyMaxHp= this.enemyHp;
+    this.score     = 0;
+    this.turn      = 'player';
+    this.busy      = false;
+    this.battle    = this.fromOverworld ? (this._initData.battleNum || 1) : 0;
+    this.maxBattles= this.fromOverworld ? 1 : 5;
+
+    const bgColor = parseInt((p.background || '#0a0a1a').replace('#',''), 16);
+    const floorColor = parseInt((p.secondary || '#1a1a3a').replace('#',''), 16);
+    const menuColor  = 0x000000;
+
+    // ── Background ────────────────────────────────────────────
+    this.add.rectangle(W/2, H/2, W, H, bgColor).setDepth(0);
+    // Battle floor
+    this.add.rectangle(W/2, H*0.72, W, H*0.56, floorColor).setDepth(1);
+    // Sky gradient hint
+    this.add.rectangle(W/2, H*0.25, W, H*0.5, parseInt((p.primary||'#050510').replace('#',''),16)).setDepth(1);
+
+    // ── Enemy sprite (large, top right) ───────────────────────
+    this.enemySprite = this.add.image(320, 110, 'boss', 0)
+      .setDepth(5).setScale(3).setFlipX(false);
+    if (!this.textures.get('boss').has(0)) {
+      // Fallback colored rectangle
+      const g = this.make.graphics({add:false});
+      g.fillStyle(parseInt((p.accent||'#8b0000').replace('#',''),16));
+      g.fillRect(0,0,40,40);
+      g.fillStyle(0xff0000); g.fillRect(5,5,12,12); g.fillRect(23,5,12,12);
+      g.generateTexture('boss_fallback',40,40); g.destroy();
+      this.enemySprite = this.add.image(320, 110, 'boss_fallback').setDepth(5).setScale(2);
+    }
+
+    // Enemy HP bar (above enemy)
+    this.add.rectangle(320, 52, 120, 12, 0x000000, 0.8).setDepth(6);
+    this.add.rectangle(260, 52, 120, 8, 0x440000, 1).setDepth(7).setOrigin(0, 0.5);
+    this.enemyHpBar = this.add.rectangle(260, 52, 120, 8, 0xff2200, 1).setDepth(8).setOrigin(0, 0.5);
+    this.enemyHpText = this.add.text(260, 42, `HP ${this.enemyHp}/${this.enemyMaxHp}`,
+      { fontSize:'7px', fontFamily:'Courier New', color:'#ff8888' }).setDepth(9);
+    this.battleLabel = this.add.text(260, 32, `BATTLE ${this.battle+1}/${this.maxBattles}`,
+      { fontSize:'7px', fontFamily:'Courier New', color:'#888' }).setDepth(9);
+
+    // ── Player sprite (small, bottom left) ────────────────────
+    this.playerSprite = this.add.image(120, 185, 'player', 0)
+      .setDepth(5).setScale(2.5);
+
+    // ── Player stats panel ─────────────────────────────────────
+    this.add.rectangle(100, 248, 190, 60, menuColor, 0.9).setDepth(6);
+    this.add.text(12, 224, MANIFEST.title || 'HERO',
+      { fontSize:'9px', fontFamily:'Courier New', color: p.hud_text||'#ffcc00' }).setDepth(7);
+    this.add.text(12, 236, 'HP', { fontSize:'8px', fontFamily:'Courier New', color:'#ff4444' }).setDepth(7);
+    this.add.rectangle(35, 240, 80, 6, 0x440000).setDepth(7).setOrigin(0,0.5);
+    this.hpBar = this.add.rectangle(35, 240, 80, 6, 0xff2200).setDepth(8).setOrigin(0,0.5);
+    this.hpText = this.add.text(120, 234, `${this.playerHp}/${this.maxHp}`,
+      { fontSize:'7px', fontFamily:'Courier New', color:'#ff8888' }).setDepth(7);
+    this.add.text(12, 248, 'MP', { fontSize:'8px', fontFamily:'Courier New', color:'#8844ff' }).setDepth(7);
+    this.add.rectangle(35, 252, 80, 6, 0x220044).setDepth(7).setOrigin(0,0.5);
+    this.mpBar = this.add.rectangle(35, 252, 80, 6, 0x8800ff).setDepth(8).setOrigin(0,0.5);
+    this.mpText = this.add.text(120, 246, `${this.playerMp}/${this.maxMp}`,
+      { fontSize:'7px', fontFamily:'Courier New', color:'#aa88ff' }).setDepth(7);
+    this.scoreText = this.add.text(12, 261, 'SCORE 0',
+      { fontSize:'7px', fontFamily:'Courier New', color:'#888' }).setDepth(7);
+
+    // ── Action menu ────────────────────────────────────────────
+    this.add.rectangle(360, 248, 190, 60, menuColor, 0.9).setDepth(6);
+    this.menuItems = ['ATTACK', 'MAGIC', 'HEAL', 'RUN'];
+    this.selectedAction = 0;
+    this.menuTexts = this.menuItems.map((item, i) => {
+      const col = i % 2, row = Math.floor(i/2);
+      return this.add.text(275 + col*90, 228 + row*22, `▶ ${item}`,
+        { fontSize:'9px', fontFamily:'Courier New',
+          color: i === 0 ? '#ffffff' : '#888888' }).setDepth(7);
+    });
+
+    // ── Battle log ─────────────────────────────────────────────
+    this.battleLog = this.add.text(W/2, 208,
+      'YOUR TURN — CHOOSE ACTION',
+      { fontSize:'8px', fontFamily:'Courier New', color:'#aaaaaa' })
+      .setDepth(7).setOrigin(0.5);
+
+    // ── Input ──────────────────────────────────────────────────
+    this.keys = this.input.keyboard.addKeys({
+      left:   Phaser.Input.Keyboard.KeyCodes.LEFT,
+      right:  Phaser.Input.Keyboard.KeyCodes.RIGHT,
+      up:     Phaser.Input.Keyboard.KeyCodes.UP,
+      down:   Phaser.Input.Keyboard.KeyCodes.DOWN,
+      confirm:Phaser.Input.Keyboard.KeyCodes.SPACE,
+      confirm2:Phaser.Input.Keyboard.KeyCodes.ENTER,
+    });
+  }
+
+  _updateMenu() {
+    this.menuTexts.forEach((t, i) => {
+      t.setText(`${i === this.selectedAction ? '▶' : ' '} ${this.menuItems[i]}`);
+      t.setColor(i === this.selectedAction ? '#ffffff' : '#888888');
+    });
+  }
+
+  _log(msg) { this.battleLog.setText(msg); }
+
+  _updateBars() {
+    this.hpBar.width    = 80 * Math.max(0, this.playerHp) / this.maxHp;
+    this.mpBar.width    = 80 * Math.max(0, this.playerMp) / this.maxMp;
+    this.enemyHpBar.width = 120 * Math.max(0, this.enemyHp) / this.enemyMaxHp;
+    this.hpText.setText(`${Math.max(0,this.playerHp)}/${this.maxHp}`);
+    this.mpText.setText(`${Math.max(0,this.playerMp)}/${this.maxMp}`);
+    this.enemyHpText.setText(`HP ${Math.max(0,this.enemyHp)}/${this.enemyMaxHp}`);
+    this.scoreText.setText(`SCORE ${this.score}`);
+  }
+
+  _playerAction() {
+    if (this.busy) return;
+    this.busy = true;
+    const bcfg = MANIFEST.game_config.battle || {};
+    const action = this.menuItems[this.selectedAction];
+
+    if (action === 'ATTACK') {
+      const dmg = (bcfg.base_attack || 20) + Phaser.Math.Between(-5, 5);
+      this.enemyHp -= dmg;
+      this._log(`You attacked for ${dmg} damage!`);
+      this.cameras.main.shake(80, 0.006);
+      this.enemySprite.setTint(0xff0000);
+      this.time.delayedCall(200, () => { this.enemySprite.clearTint(); this._afterPlayerTurn(); });
+
+    } else if (action === 'MAGIC') {
+      if (this.playerMp < 10) { this._log('Not enough MP!'); this.busy = false; return; }
+      const dmg = (bcfg.base_magic || 30) + Phaser.Math.Between(-3, 8);
+      this.playerMp -= 10;
+      this.enemyHp  -= dmg;
+      this._log(`Magic hit for ${dmg} damage!`);
+      this.enemySprite.setTint(0xaa00ff);
+      this.time.delayedCall(300, () => { this.enemySprite.clearTint(); this._afterPlayerTurn(); });
+
+    } else if (action === 'HEAL') {
+      if (this.playerMp < 8) { this._log('Not enough MP!'); this.busy = false; return; }
+      const heal = (bcfg.base_heal || 25) + Phaser.Math.Between(-5, 5);
+      this.playerMp -= 8;
+      this.playerHp  = Math.min(this.maxHp, this.playerHp + heal);
+      this._log(`Healed ${heal} HP!`);
+      this.playerSprite.setTint(0x44ff44);
+      this.time.delayedCall(300, () => { this.playerSprite.clearTint(); this._afterPlayerTurn(); });
+
+    } else if (action === 'RUN') {
+      this._log('Got away safely!');
+      this.time.delayedCall(800, () => this._endBattle(false));
+      return;
+    }
+    this._updateBars();
+  }
+
+  _afterPlayerTurn() {
+    this._updateBars();
+    if (this.enemyHp <= 0) {
+      this.score += 200 + this.battle * 50;
+      this._log(`Enemy defeated! +${200 + this.battle * 50} pts`);
+      this.enemySprite.setAlpha(0.3);
+      this.time.delayedCall(1200, () => this._endBattle(true));
+      return;
+    }
+    // Enemy turn
+    this._log('Enemy is thinking...');
+    this.time.delayedCall(800, () => this._enemyTurn());
+  }
+
+  _enemyTurn() {
+    const atkCfg = MANIFEST.game_config.enemy?.base_attack || 15;
+    const dmg = atkCfg + Phaser.Math.Between(-4, 4);
+    this.playerHp -= dmg;
+    this._log(`Enemy attacks for ${dmg} damage!`);
+    this.playerSprite.setTint(0xff0000);
+    this._updateBars();
+    this.time.delayedCall(400, () => {
+      this.playerSprite.clearTint();
+      if (this.playerHp <= 0) {
+        this._log('You were defeated...');
+        this.time.delayedCall(1000, () => this._gameOver());
+      } else {
+        this._log('YOUR TURN — CHOOSE ACTION');
+        this.busy = false;
+      }
+    });
+  }
+
+  _endBattle(won) {
+    this.battle++;
+    const totalScore = this.overworldScore + this.score;
+    if (won) this.playerMp = Math.min(this.maxMp, this.playerMp + 5); // Restore some MP
+
+    if (this.fromOverworld) {
+      // Return to overworld after single battle
+      const newEncounters = won ? this.encounters + 1 : this.encounters;
+      if (won && newEncounters >= this.maxEncounters) {
+        this._showEndScreen('ALL ENCOUNTERS CLEAR!', '#44ff44', totalScore);
+        return;
+      }
+      this.time.delayedCall(1200, () => {
+        this.scene.start('TurnOverworldScene', {
+          playerHp: this.playerHp,
+          playerMp: this.playerMp,
+          overworldScore: totalScore,
+          encounters: newEncounters,
+          maxEncounters: this.maxEncounters,
+          returnX: this.returnX,
+          returnY: this.returnY,
+        });
+      });
+      return;
+    }
+
+    if (this.battle >= this.maxBattles) { this._victory(); return; }
+
+    // Next enemy — gets stronger
+    const scale = 1 + this.battle * 0.3;
+    this.enemyHp    = Math.floor((MANIFEST.game_config.enemy?.base_hp || 60) * scale);
+    this.enemyMaxHp = this.enemyHp;
+    this.enemySprite.setAlpha(1).clearTint();
+    this.battleLabel.setText(`BATTLE ${this.battle+1}/${this.maxBattles}`);
+    this._log(`BATTLE ${this.battle+1} — NEW ENEMY APPEARS!`);
+    this._updateBars();
+    this.time.delayedCall(800, () => { this.busy = false; });
+  }
+
+  _victory() {
+    this.busy = true;
+    this.score += 1000;
+    const totalScore = this.overworldScore + this.score;
+    this._showEndScreen('VICTORY!', '#44ff44', totalScore);
+  }
+
+  _gameOver() {
+    this.busy = true;
+    if (this.fromOverworld) {
+      this._showEndScreen('DEFEAT...', '#ff0000', this.overworldScore + this.score);
+    } else {
+      this._showEndScreen('DEFEAT...', '#ff0000');
+    }
+  }
+
+  _showEndScreen(title, color, finalScore) {
+    const s = finalScore ?? this.score;
+    this.add.rectangle(W/2,H/2,W,H,0x000000,0.8).setDepth(40);
+    this.add.text(W/2,H/2-25, title,
+      { fontSize:'24px', fontFamily:'Courier New', color, stroke:'#000', strokeThickness:3 })
+      .setDepth(41).setOrigin(0.5);
+    this.add.text(W/2,H/2+5, `SCORE: ${s}`,
+      { fontSize:'11px', fontFamily:'Courier New', color:'#ffcc00' })
+      .setDepth(41).setOrigin(0.5);
+    this.add.text(W/2,H/2+22, `BATTLES WON: ${this.battle}/${this.maxBattles}`,
+      { fontSize:'9px', fontFamily:'Courier New', color:'#aaaaaa' })
+      .setDepth(41).setOrigin(0.5);
+    this.add.text(W/2,H/2+38, 'REFRESH TO RETRY',
+      { fontSize:'8px', fontFamily:'Courier New', color:'#666' })
+      .setDepth(41).setOrigin(0.5);
+  }
+
+  update() {
+    if (this.busy || this.turn !== 'player') return;
+    const k = this.keys;
+
+    if (Phaser.Input.Keyboard.JustDown(k.left)) {
+      this.selectedAction = (this.selectedAction + this.menuItems.length - 1) % this.menuItems.length;
+      this._updateMenu();
+    }
+    if (Phaser.Input.Keyboard.JustDown(k.right)) {
+      this.selectedAction = (this.selectedAction + 1) % this.menuItems.length;
+      this._updateMenu();
+    }
+    if (Phaser.Input.Keyboard.JustDown(k.confirm) || Phaser.Input.Keyboard.JustDown(k.confirm2)) {
+      this._playerAction();
+    }
+  }
+}
+
+// ============================================================
+// PHASER BOOT — routes to correct template based on manifest
+// ============================================================
+function bootPhaser() {
+  const template   = MANIFEST.template || 'wave_shooter';
+  const useGravity = template === 'side_scroll_platformer';
+
+  const CONTROLS = {
+    wave_shooter:         'WASD — MOVE  |  MOUSE — AIM & SHOOT  |  R — RELOAD',
+    side_scroll_platformer:'A/D — MOVE  |  W / SPACE — JUMP',
+    top_down_action_rpg:  'WASD — MOVE  |  SPACE — ATTACK  |  E — MAGIC',
+    open_world_sandbox:   'WASD — MOVE  |  SPACE — ATTACK  |  ★ FIND MISSIONS',
+    turn_based_rpg:       'WASD — MOVE  |  SPACE — INTERACT  |  ← → — BATTLE MENU',
+  };
+  const footer = document.getElementById('footer');
+  if (footer) footer.textContent = CONTROLS[template] || CONTROLS.wave_shooter;
+
+  const SCENE_MAP = {
+    wave_shooter:          [PreloadScene, GameScene, HUDScene],
+    side_scroll_platformer:[PreloadScene, PlatformerScene, PlatformerHUD],
+    top_down_action_rpg:   [PreloadScene, TopDownRPGScene, TopDownHUD],
+    open_world_sandbox:    [PreloadScene, OpenWorldScene, OpenWorldHUD],
+    turn_based_rpg:        [PreloadScene, TurnOverworldScene, TurnOverworldHUD, TurnBasedScene],
+  };
+  const scenes = SCENE_MAP[template] || SCENE_MAP.wave_shooter;
+
+  const config = {
+    type: Phaser.AUTO,
+    width: W, height: H,
+    backgroundColor: '#0d0500',
+    parent: 'game-container',
+    pixelArt: true,
+    antialias: false,
+    physics: {
+      default: 'arcade',
+      arcade: {
+        gravity: { y: useGravity ? (MANIFEST.game_config?.physics?.gravity || 800) : 0 },
+        debug: false
+      }
+    },
+    scene: scenes
+  };
+
+  new Phaser.Game(config);
+}
+
+// ============================================================
+// CHIPTUNE AUDIO — inline Web Audio API (no CDN, works in Firefox)
+// Generates NES-style beeps from the manifest's music_vibe
+// ============================================================
+function initAudio() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+
+    const vibe  = MANIFEST.debug?.music_vibe  || 'intense_action';
+    const tempo = MANIFEST.debug?.music_tempo || 'fast';
+
+    // BPM map
+    const bpmMap = { slow: 72, medium: 96, fast: 132, frantic: 168 };
+    const bpm    = bpmMap[tempo] || 120;
+    const beat   = 60 / bpm;
+
+    // Scale notes (MIDI-ish frequencies)
+    const scales = {
+      intense_action: [220, 247, 277, 330, 370, 415, 466, 440],
+      dark_horror:    [220, 233, 261, 311, 330, 349, 392, 415],
+      epic_adventure: [261, 293, 329, 349, 392, 440, 493, 523],
+      urban_gritty:   [220, 261, 311, 330, 392, 415, 466, 440],
+      mysterious:     [246, 261, 293, 311, 370, 392, 440, 466],
+    };
+    const notes = scales[vibe] || scales.intense_action;
+
+    function playNote(freq, startTime, duration, volume = 0.08) {
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = 'square';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(volume, startTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+      osc.start(startTime);
+      osc.stop(startTime + duration + 0.05);
+    }
+
+    // Generate a 4-bar loop
+    function playLoop(startTime) {
+      const barLen = beat * 4;
+      for (let bar = 0; bar < 4; bar++) {
+        for (let step = 0; step < 8; step++) {
+          const t = startTime + bar * barLen + step * beat * 0.5;
+          // Melody on pulse 1
+          playNote(notes[step % notes.length], t, beat * 0.45, 0.07);
+          // Bass on triangle (octave down)
+          if (step % 2 === 0) {
+            playNote(notes[step % notes.length] / 2, t, beat * 0.9, 0.05);
+          }
+          // Drum click on beats 1 and 3
+          if (step === 0 || step === 4) {
+            const noise = ctx.createOscillator();
+            const ng    = ctx.createGain();
+            noise.connect(ng); ng.connect(ctx.destination);
+            noise.type = 'square';
+            noise.frequency.value = 80;
+            ng.gain.setValueAtTime(0.1, t);
+            ng.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+            noise.start(t); noise.stop(t + 0.06);
+          }
+        }
+      }
+      // Schedule next loop
+      const loopDuration = beat * 4 * 4;
+      setTimeout(() => playLoop(ctx.currentTime + 0.1), (loopDuration - 0.2) * 1000);
+    }
+
+    playLoop(ctx.currentTime + 0.1);
+    window._audioStarted = true;
+    console.log('[Audio] Chiptune BGM started via Web Audio API');
+  } catch(e) {
+    console.warn('[Audio] Web Audio failed:', e);
+  }
+}
+
+// Start audio on first click — browser requires user gesture
+document.addEventListener('click', () => {
+  if (!window._audioStarted) initAudio();
+}, { once: true });
 </script>
 </body>
 </html>

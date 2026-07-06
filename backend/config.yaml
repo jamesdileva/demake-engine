@@ -1,6 +1,8 @@
 # ============================================================
 # DEMAKE ENGINE — Runtime Config
 # Edit this file to change behaviour without touching code
+# python -m uvicorn main:app --reload
+# venv\Scripts\activate
 # ============================================================
 
 server:
@@ -21,7 +23,13 @@ pipeline:
 
 hardware:
   vram_limit_mb: 4096
-  cpu_offload: true     # Use system RAM when VRAM is full
+  cpu_offload: true       # Use system RAM when VRAM is full
+  force_cpu: false        # Set true to skip GPU entirely
+  # force_backend: "directml"   # Uncomment to force a specific backend
+  #   Options: "cuda" | "directml" | "cpu" | "procedural"
+  #   Leave commented to auto-detect (recommended)
+  #   AMD GPU on Windows → directml is auto-selected
+  #   NVIDIA GPU → cuda is auto-selected
 
 genre_templates:
   available:

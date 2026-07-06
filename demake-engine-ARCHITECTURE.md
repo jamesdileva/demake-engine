@@ -786,6 +786,22 @@ This is the central data structure that connects the ML pipeline to the game eng
 - [ ] `config.yaml` documentation
 - [ ] MIT License
 
+Sprint 5:   Polish & Wiring Review
+Sprint 5.5: Prompt & Cache Tuning (CLIP truncation fix, smarter dedup)
+Sprint 6:   Fine-tuned Sprites
+Sprint 6.5: WebSocket Hardening
+Sprint 7:   Tilemap Generation
+Sprint 8:   Save & Share
+Sprint 9:   Multi-trailer Blending
+Sprint 8A  — Shared game systems (entities, inventory, projectiles)
+Sprint 8B  — Wave Shooter full loop (CoD Zombies mansion)
+Sprint 8C  — Top Down ARPG full loop (KH Coliseum + world)  
+Sprint 8D  — Open World full loop (GTA city + wanted system)
+Sprint 8E  — Turn Based full loop (Pokemon encounters + gym)
+Sprint 9   — Unity/Godot export
+Sprint 10  — IGDB title lookup (your earlier idea — replaces VLM for known games)
+Sprint 11  — Save & Share (hosted demakes, permanent URLs)
+
 ---
 
 ## 13. Tech Stack Summary

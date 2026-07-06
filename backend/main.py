@@ -97,21 +97,11 @@ app.mount(
     name="outputs"
 )
 
-
-# ── Root ──────────────────────────────────────────────────────────────────────
-@app.get("/")
-def root():
-    return {
-        "service":  "Demake Engine API",
-        "version":  "0.1.0",
-        "status":   "running",
-        "docs":     "/docs",
-        "endpoints": {
-            "upload":   "POST /api/v1/demake/upload",
-            "status":   "GET  /api/v1/demake/{id}/status",
-            "manifest": "GET  /api/v1/demake/{id}/manifest",
-            "asset":    "GET  /api/v1/demake/{id}/asset/{filename}",
-            "ws":       "WS   /ws/demake/{id}",
-            "health":   "GET  /health",
-        }
-    }
+# ── Serve frontend — MUST be last mount ───────────────────────────────────────
+# Serves index.html, game.html and any other frontend assets
+# Must come after all API routes or it will swallow them
+app.mount(
+    "/",
+    StaticFiles(directory="../frontend", html=True),
+    name="frontend"
+)

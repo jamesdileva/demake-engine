@@ -16,12 +16,23 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from database.db import SessionLocal
-from database.models import Demake
+from database.models import Demake, Asset
 
 # Sprint 2 — real implementations wired in
 from pipeline.ingestion    import run_ingestion
 from pipeline.vlm_analysis import run_vlm_analysis, match_genre_template
 from pipeline.validator    import GameDNA
+
+# Sprint 3 — real implementations wired in
+from pipeline.sprite_gen import run_sprite_gen
+from pipeline.audio_gen  import run_audio_gen
+
+# Sprint 4 — manifest assembly
+from pipeline.manifest_builder import build_manifest
+
+# Sprint 7 — tilemap generation
+from pipeline.tilemap_gen import run_tilemap_gen
+
 import yaml as _yaml
 
 def _load_config():
@@ -157,20 +168,54 @@ async def _run_pipeline(demake_id: str):
         db.commit()
         print(f"[Pipeline] Genre matched: {template_id}")
 
-        # ── Stage 5: Sprite Generation (STUB — Sprint 3) ──────────────────
+        # ── Stage 5: Sprite Generation (REAL — Sprint 3) ─────────────────
         await _set_status(db, demake, "generating_sprites", 5, 60,
                           "Generating pixel art sprites...")
-        await asyncio.sleep(1.0)   # STUB — Sprint 3
+        sprite_paths = await asyncio.get_event_loop().run_in_executor(
+            None, run_sprite_gen, dna, output_dir, _CONFIG
+        )
+        for slot_name, file_path in sprite_paths.items():
+            db.add(Asset(
+                demake_id  = demake_id,
+                asset_type = slot_name,
+                slot_name  = slot_name,
+                file_path  = file_path,
+                frame_width = 16,
+            ))
+        db.commit()
+        print(f"[Pipeline] Generated {len(sprite_paths)} sprites")
 
-        # ── Stage 6: Audio Generation (STUB — Sprint 3) ───────────────────
+        # ── Stage 6: Audio Generation (REAL — Sprint 3) ───────────────────
         await _set_status(db, demake, "generating_audio", 6, 80,
                           "Composing chiptune music...")
-        await asyncio.sleep(0.5)   # STUB — Sprint 3
+        audio_paths = await asyncio.get_event_loop().run_in_executor(
+            None, run_audio_gen, dna, output_dir
+        )
+        for track_name, file_path in audio_paths.items():
+            db.add(Asset(
+                demake_id  = demake_id,
+                asset_type = f"audio_{track_name}",
+                slot_name  = track_name,
+                file_path  = file_path,
+            ))
+        db.commit()
+        print(f"[Pipeline] Generated {len(audio_paths)} audio tracks")
 
-        # ── Stage 7: Manifest Assembly (STUB — Sprint 4) ──────────────────
+        # ── Stage 7: Tilemap + Manifest Assembly (Sprint 7) ──────────────
         await _set_status(db, demake, "assembling", 7, 92,
-                          "Assembling game manifest...")
-        await asyncio.sleep(0.3)   # STUB — Sprint 4
+                          "Generating tilemap and assembling manifest...")
+
+        # Generate WFC tilemap
+        tilemap = await asyncio.get_event_loop().run_in_executor(
+            None, run_tilemap_gen, dna, output_dir
+        )
+        print(f"[Pipeline] Tilemap generated: {tilemap['stats']}")
+
+        # Assemble final manifest (includes tilemap reference)
+        manifest = await asyncio.get_event_loop().run_in_executor(
+            None, build_manifest, demake_id, dna, template_id, output_dir
+        )
+        print(f"[Pipeline] Manifest assembled: {len(manifest.get('assets', {}).get('sprites', {}))} sprites")
 
         # ── Stage 8: Done ─────────────────────────────────────────────────
         demake.status       = "ready"
