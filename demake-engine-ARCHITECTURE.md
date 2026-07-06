@@ -790,6 +790,7 @@ Sprint 5:   Polish & Wiring Review
 Sprint 5.5: Prompt & Cache Tuning (CLIP truncation fix, smarter dedup)
 Sprint 6:   Fine-tuned Sprites
 Sprint 6.5: WebSocket Hardening
+
 Sprint 7:   Tilemap Generation
 Sprint 8:   Save & Share
 Sprint 9:   Multi-trailer Blending
