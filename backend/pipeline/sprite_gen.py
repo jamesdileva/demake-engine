@@ -329,7 +329,7 @@ def _run_generation_loop(pipe, dna: GameDNA, sprites_dir: str,
 
         _write_cache(cache_key, out_path)
         clear_fn()
-        print(f"[SpriteGen] ({i}/{total}) ✓ Saved: {out_path}")
+        print(f"[SpriteGen] ({i}/{total}) [OK] Saved: {out_path}")
 
     return results
 

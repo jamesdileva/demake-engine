@@ -230,7 +230,7 @@ async def _run_pipeline(demake_id: str):
             "progress_pct": 100,
             "message":      "Your demake is ready to play!",
         })
-        print(f"[Pipeline] [{demake_id[:8]}] ✓ Complete")
+        print(f"[Pipeline] [{demake_id[:8]}] [OK] Complete")
 
     except Exception as e:
         # Never crash the worker — mark as failed and keep going

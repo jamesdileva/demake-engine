@@ -227,11 +227,11 @@ def validate_vlm_output(raw_json: str, attempt: int = 0) -> GameDNA | None:
         data = json.loads(cleaned)
         data = _fuzzy_fix(data)   # Fix common model enum mismatches
         dna = GameDNA.model_validate(data)
-        print(f"[Validator] ✓ Valid GameDNA (attempt {attempt + 1}): "
+        print(f"[Validator] [OK] Valid GameDNA (attempt {attempt + 1}): "
               f"genre={dna.genre}, confidence={dna.confidence:.2f}")
         return dna
     except Exception as e:
-        print(f"[Validator] ✗ Attempt {attempt + 1} failed: {e}")
+        print(f"[Validator] [FAIL] Attempt {attempt + 1} failed: {e}")
         return None
 
 

@@ -102,7 +102,7 @@ async def upload_video(
     # Enqueue the job — pipeline worker picks it up immediately
     await enqueue(demake_id)
 
-    print(f"[Upload] {file.filename} → {demake_id[:8]} | {len(contents) / 1024:.1f} KB")
+    print(f"[Upload] {file.filename} -> {demake_id[:8]} | {len(contents) / 1024:.1f} KB")
 
     return {
         "demake_id": demake_id,

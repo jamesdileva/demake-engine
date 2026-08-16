@@ -124,7 +124,7 @@ def run_vlm_analysis(best_frames: list[str], output_dir: str, config: dict) -> G
     for title_key, forced_genre in TITLE_GENRE_MAP.items():
         if title_key in title_lower:
             if dna.genre != forced_genre:
-                print(f"[VLM] Title override: '{dna.title_guess}' → {forced_genre} (was {dna.genre})")
+                print(f"[VLM] Title override: '{dna.title_guess}' -> {forced_genre} (was {dna.genre})")
                 dna.genre = forced_genre
                 dna.confidence = max(dna.confidence, 0.75)
             break
