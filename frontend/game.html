@@ -1230,6 +1230,7 @@ class PlatformerScene extends Phaser.Scene {
     // ── Camera ────────────────────────────────────────────────
     this.cameras.main.setBounds(0, 0, worldWidth, worldHeight);
     this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
+    this.cameras.main.setZoom(1.5);
     this.cameras.main.setBackgroundColor(skyColor);
 
     // ── Input ─────────────────────────────────────────────────
@@ -1445,7 +1446,9 @@ class TopDownRPGScene extends Phaser.Scene {
     this.physics.add.collider(this.player,  this.walls);
     this.physics.add.collider(this.enemies, this.walls);
     this.physics.add.overlap(this.player, this.enemies, this._touchEnemy, null, this);
-
+    // In TopDownRPGScene.create(), after collisions, add a camera follow + zoom:
+    this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
+    this.cameras.main.setZoom(1.5);
     // ── Input ─────────────────────────────────────────────────
     this.keys = this.input.keyboard.addKeys({
       up:    Phaser.Input.Keyboard.KeyCodes.W,
@@ -1642,6 +1645,7 @@ class OpenWorldScene extends Phaser.Scene {
 
     // ── Camera ─────────────────────────────────────────────────
     this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
+    this.cameras.main.setZoom(1.5);
 
     // ── Input ──────────────────────────────────────────────────
     this.keys = this.input.keyboard.addKeys({
@@ -1795,7 +1799,9 @@ class TurnOverworldScene extends Phaser.Scene {
 
     // ── Collision ──────────────────────────────────────────────
     this.physics.add.collider(this.player, this.walls);
-
+    // In TurnOverworldScene.create(), same addition:
+    this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
+    this.cameras.main.setZoom(1.5);
     // ── Input ─────────────────────────────────────────────────
     this.keys = this.input.keyboard.addKeys({
       up:    Phaser.Input.Keyboard.KeyCodes.W,
@@ -1959,8 +1965,13 @@ class TurnBasedScene extends Phaser.Scene {
     this.battle    = this.fromOverworld ? (this._initData.battleNum || 1) : 0;
     this.maxBattles= this.fromOverworld ? 1 : 5;
 
-    const bgColor = parseInt((p.background || '#0a0a1a').replace('#',''), 16);
-    const floorColor = parseInt((p.secondary || '#1a1a3a').replace('#',''), 16);
+    const toColor = (v, fallback) => {
+      if (typeof v === 'number') return v;
+      return parseInt((v || fallback).replace('#',''), 16);
+    };
+
+    const bgColor    = toColor(p.background, '#0a0a1a');
+    const floorColor = toColor(p.secondary,  '#1a1a3a');
     const menuColor  = 0x000000;
 
     // ── Background ────────────────────────────────────────────
@@ -1968,7 +1979,7 @@ class TurnBasedScene extends Phaser.Scene {
     // Battle floor
     this.add.rectangle(W/2, H*0.72, W, H*0.56, floorColor).setDepth(1);
     // Sky gradient hint
-    this.add.rectangle(W/2, H*0.25, W, H*0.5, parseInt((p.primary||'#050510').replace('#',''),16)).setDepth(1);
+    this.add.rectangle(W/2, H*0.25, W, H*0.5, toColor(p.primary, '#050510')).setDepth(1);
 
     // ── Enemy sprite (large, top right) ───────────────────────
     this.enemySprite = this.add.image(320, 110, 'boss', 0)
@@ -1976,7 +1987,7 @@ class TurnBasedScene extends Phaser.Scene {
     if (!this.textures.get('boss').has(0)) {
       // Fallback colored rectangle
       const g = this.make.graphics({add:false});
-      g.fillStyle(parseInt((p.accent||'#8b0000').replace('#',''),16));
+      g.fillStyle(toColor(p.accent, '#8b0000'));
       g.fillRect(0,0,40,40);
       g.fillStyle(0xff0000); g.fillRect(5,5,12,12); g.fillRect(23,5,12,12);
       g.generateTexture('boss_fallback',40,40); g.destroy();

@@ -206,8 +206,9 @@ async def _run_pipeline(demake_id: str):
                           "Generating tilemap and assembling manifest...")
 
         # Generate WFC tilemap
+        # AFTER — pass None for width/height so genre defaults apply:
         tilemap = await asyncio.get_event_loop().run_in_executor(
-            None, run_tilemap_gen, dna, output_dir
+            None, run_tilemap_gen, dna, output_dir, None, None, 5, template_id
         )
         print(f"[Pipeline] Tilemap generated: {tilemap['stats']}")
 

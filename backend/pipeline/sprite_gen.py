@@ -18,6 +18,7 @@ VRAM strategy:
 import os
 import json
 import hashlib
+import shutil
 from pathlib import Path
 from PIL import Image, ImageDraw
 
@@ -306,7 +307,9 @@ def _run_generation_loop(pipe, dna: GameDNA, sprites_dir: str,
         cached_path = _check_cache(cache_key)
         if cached_path:
             print(f"[SpriteGen] ({i}/{total}) Cache hit: {slot_name}")
-            results[slot_name] = cached_path
+            out_path = os.path.normpath(os.path.join(sprites_dir, f"{slot_name}.png"))
+            shutil.copy2(cached_path, out_path)
+            results[slot_name] = out_path
             continue
 
         print(f"[SpriteGen] ({i}/{total}) Generating: {slot_name} "

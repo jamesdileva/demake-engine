@@ -322,6 +322,165 @@ GENRE_WEIGHTS = {
     },
 }
 
+# ── Genre-specific default map sizes ────────────────────────────────────────
+# Open world needs to feel big. Dungeons/arenas can stay compact.
+GENRE_MAP_SIZE = {
+    "open_world_sandbox":    (60, 45),   # was 30x20 — now 2.7x bigger
+    "top_down_action_rpg":   (36, 26),   # room for multiple dungeon rooms
+    "turn_based_rpg":        (42, 30),   # town + routes + grass fields
+    "wave_shooter":          (30, 20),   # unchanged — bunker fits fine
+    "side_scroll_platformer":(48, 12),   # unchanged — already working
+}
+
+
+def _generate_bsp_dungeon(width: int, height: int) -> list[list[str]]:
+    """
+    Binary Space Partition dungeon generator.
+    Produces connected rectangular rooms — the classic roguelike layout.
+    Returns a grid of 'floor' / 'wall' before decoration is added.
+    """
+    import random as _r
+
+    # Start with all walls
+    grid = [["wall" for _ in range(width)] for _ in range(height)]
+
+    class Node:
+        def __init__(self, x, y, w, h):
+            self.x, self.y, self.w, self.h = x, y, w, h
+            self.left = None
+            self.right = None
+            self.room = None  # (rx, ry, rw, rh)
+
+        def split(self, min_size=8):
+                    can_h = self.h >= min_size * 2
+                    can_w = self.w >= min_size * 2
+                    if not can_h and not can_w:
+                        return False
+
+                    if can_h and can_w:
+                        horizontal = _r.random() > 0.5
+                    else:
+                        horizontal = can_h  # pick whichever axis actually has room
+
+                    if horizontal:
+                        split_y = _r.randint(min_size, self.h - min_size)
+                        self.left  = Node(self.x, self.y, self.w, split_y)
+                        self.right = Node(self.x, self.y + split_y, self.w, self.h - split_y)
+                    else:
+                        split_x = _r.randint(min_size, self.w - min_size)
+                        self.left  = Node(self.x, self.y, split_x, self.h)
+                        self.right = Node(self.x + split_x, self.y, self.w - split_x, self.h)
+                    return True
+
+        def create_room(self):
+            if self.left or self.right:
+                if self.left:  self.left.create_room()
+                if self.right: self.right.create_room()
+                return
+            # Leaf node — carve a room with margin
+            margin = 1
+            rw = _r.randint(4, max(4, self.w - margin * 2))
+            rh = _r.randint(4, max(4, self.h - margin * 2))
+            rx = self.x + _r.randint(margin, max(margin, self.w - rw - margin))
+            ry = self.y + _r.randint(margin, max(margin, self.h - rh - margin))
+            self.room = (rx, ry, rw, rh)
+            for yy in range(ry, min(ry + rh, height)):
+                for xx in range(rx, min(rx + rw, width)):
+                    grid[yy][xx] = "floor"
+
+        def get_room(self):
+            if self.room:
+                return self.room
+            l = self.left.get_room() if self.left else None
+            r = self.right.get_room() if self.right else None
+            return l or r
+
+        def connect_children(self):
+            if not (self.left and self.right):
+                return
+            self.left.connect_children()
+            self.right.connect_children()
+            r1 = self.left.get_room()
+            r2 = self.right.get_room()
+            if r1 and r2:
+                x1, y1 = r1[0] + r1[2]//2, r1[1] + r1[3]//2
+                x2, y2 = r2[0] + r2[2]//2, r2[1] + r2[3]//2
+
+                def carve_wide(cx, cy):
+                    """Carve a 2x2 area so corridors are wide enough to walk through."""
+                    for oy in range(2):
+                        for ox in range(2):
+                            ny, nx = cy + oy, cx + ox
+                            if 0 <= ny < height and 0 <= nx < width:
+                                grid[ny][nx] = "floor"
+
+                if _r.random() > 0.5:
+                    for x in range(min(x1,x2), max(x1,x2)+1):
+                        carve_wide(x, y1)
+                    for y in range(min(y1,y2), max(y1,y2)+1):
+                        carve_wide(x2, y)
+                else:
+                    for y in range(min(y1,y2), max(y1,y2)+1):
+                        carve_wide(x1, y)
+                    for x in range(min(x1,x2), max(x1,x2)+1):
+                        carve_wide(x, y2)
+
+    root = Node(1, 1, width - 2, height - 2)
+    def recursive_split(node, depth=0):
+        if depth >= 3:
+            return
+        if node.split():
+            recursive_split(node.left, depth + 1)
+            recursive_split(node.right, depth + 1)
+
+    recursive_split(root)
+    root.create_room()
+    root.connect_children()
+
+    return grid
+
+
+def _decorate_dungeon(grid: list[list[str]], width: int, height: int) -> list[list[str]]:
+    """Add torches, chests, enemy spawns, player spawn to a BSP dungeon."""
+    import random as _r
+
+    floor_cells = [(x, y) for y in range(height) for x in range(width)
+                   if grid[y][x] == "floor"]
+    if not floor_cells:
+        return grid
+
+    floor_cells.sort(key=lambda p: p[0])
+    px, py = floor_cells[0]
+    grid[py][px] = "player"
+
+    remaining = [c for c in floor_cells if c != (px, py)]
+    remaining.sort(key=lambda p: -((p[0]-px)**2 + (p[1]-py)**2))
+    enemy_count = min(8, len(remaining) // 12)
+    for i in range(enemy_count):
+        idx = int(i * len(remaining) / max(enemy_count, 1))
+        ex, ey = remaining[idx]
+        grid[ey][ex] = "enemy"
+
+    chest_count = min(3, len(remaining) // 30)
+    for i in range(chest_count):
+        idx = _r.randint(0, len(remaining) - 1)
+        cx, cy = remaining[idx]
+        if grid[cy][cx] == "floor":
+            grid[cy][cx] = "chest"
+
+    torch_count = min(6, width // 4)
+    wall_adjacent = []
+    for y in range(1, height - 1):
+        for x in range(1, width - 1):
+            if grid[y][x] == "wall":
+                neighbors = [grid[y-1][x], grid[y+1][x], grid[y][x-1], grid[y][x+1]]
+                if "floor" in neighbors:
+                    wall_adjacent.append((x, y))
+    for _ in range(min(torch_count, len(wall_adjacent))):
+        tx, ty = _r.choice(wall_adjacent)
+        grid[ty][tx] = "torch"
+
+    return grid
 
 def _ensure_required_tiles(grid: list[list[str]], genre: str,
                             width: int, height: int) -> list[list[str]]:
@@ -362,6 +521,122 @@ def _ensure_required_tiles(grid: list[list[str]], genre: str,
             grid[height - 2][ex] = enemy_tile or "enemy"
 
         return grid
+
+
+
+# ── Open World Sandbox — carve grid-aligned streets ──
+    if genre == "open_world_sandbox":
+        import random as _r
+        road_tile     = "road"
+        sidewalk_tile = "sidewalk"
+
+        # Step 1 — fill EVERYTHING with block interior first
+        # (building-heavy so streets will visually contrast against it)
+        interior_weights = {"building": 6.0, "park": 2.0, "alley": 1.5}
+        interior_tiles   = list(interior_weights.keys())
+        interior_wts     = list(interior_weights.values())
+
+        for y in range(height):
+            for x in range(width):
+                grid[y][x] = _r.choices(interior_tiles, weights=interior_wts, k=1)[0]
+
+        # Step 2 — carve a real street grid ON TOP, overwriting interior
+        # Vertical streets every 6 tiles (road + sidewalk pair)
+        # Step 2 — carve a real street grid ON TOP, overwriting interior
+        for x in range(0, width, 7):   # wider spacing between streets
+            for y in range(height):
+                grid[y][x] = road_tile
+                if x + 1 < width:
+                    grid[y][x + 1] = road_tile
+                if x + 2 < width:
+                    grid[y][x + 2] = sidewalk_tile
+
+        for y in range(0, height, 6):  # wider spacing
+            for x in range(width):
+                grid[y][x] = road_tile
+                if y + 1 < height:
+                    grid[y + 1][x] = road_tile
+
+        # Step 3 — player spawn on a road/sidewalk tile near top-left
+        placed_player = False
+        for y in range(height):
+            for x in range(width):
+                if grid[y][x] in (road_tile, sidewalk_tile):
+                    grid[y][x] = "player"
+                    placed_player = True
+                    break
+            if placed_player:
+                break
+
+        # Step 4 — NPC/cop spawns on streets, spaced out
+        spawn_tile = next((t for t, td in tile_set.items()
+                           if td.spawn_enemy), "spawn")
+        placed = 0
+        for y in range(2, height - 2, 4):
+            for x in range(2, width - 2, 7):
+                if grid[y][x] in (road_tile, sidewalk_tile) and placed < 12:
+                    grid[y][x] = spawn_tile
+                    placed += 1
+
+        # Step 5 — mission markers on sidewalks
+        mission_tile = next((t for t, td in tile_set.items()
+                             if td.spawn_item), None)
+        if mission_tile:
+            placed = 0
+            for y in range(3, height - 3, 6):
+                for x in range(3, width - 3, 9):
+                    if grid[y][x] in (road_tile, sidewalk_tile) and placed < 5:
+                        grid[y][x] = mission_tile
+                        placed += 1
+
+        return grid
+
+# ── Top down action RPG — Carve out real dungeon ──
+    if genre == "top_down_action_rpg":
+            dungeon = _generate_bsp_dungeon(width, height)
+            dungeon = _decorate_dungeon(dungeon, width, height)
+            return dungeon
+
+# ── Turned based RPG — Carve out real town + grass overworld ──
+    if genre == "turn_based_rpg":
+            for y in range(height):
+                for x in range(width):
+                    grid[y][x] = "grass"
+
+            town_w, town_h = width // 5, height // 4
+            for y in range(2, 2 + town_h):
+                for x in range(2, 2 + town_w):
+                    grid[y][x] = "town" if (x + y) % 3 != 0 else "path"
+
+            path_x, path_y = 2 + town_w, 2 + town_h // 2
+            target_x, target_y = width - 4, height - 4
+            while path_x != target_x or path_y != target_y:
+                grid[path_y][path_x] = "path"
+                if path_x < target_x: path_x += 1
+                elif path_x > target_x: path_x -= 1
+                elif path_y < target_y: path_y += 1
+                elif path_y > target_y: path_y -= 1
+                grid[path_y][path_x] = "path"
+
+            import random as _r
+            for _ in range(6):
+                cx = _r.randint(town_w + 3, width - 5)
+                cy = _r.randint(town_h + 3, height - 5)
+                for dy in range(-2, 3):
+                    for dx in range(-2, 3):
+                        ny, nx = cy+dy, cx+dx
+                        if 0 <= ny < height and 0 <= nx < width and grid[ny][nx] == "grass":
+                            if _r.random() > 0.4:
+                                grid[ny][nx] = "tall_grass"
+
+            for _ in range(width * height // 25):
+                tx = _r.randint(0, width - 1)
+                ty = _r.randint(0, height - 1)
+                if grid[ty][tx] == "grass":
+                    grid[ty][tx] = "tree"
+
+            grid[3][3] = "player"
+            return grid
 
     # ── General post-processing for all other genres ──
     # Find passable tiles for player spawn
@@ -412,64 +687,72 @@ def _ensure_required_tiles(grid: list[list[str]], genre: str,
 
 def run_tilemap_gen(dna: GameDNA, output_dir: str,
                     width: int = None, height: int = None,
-                    max_retries: int = 5) -> dict:
+                    max_retries: int = 5,
+                    genre_override: str = None) -> dict:
     """
-    Generate a tilemap for a demake using Wave Function Collapse.
-
-    Platformers default to 48x12 (wider+shorter), other genres default to 30x20.
-
-    Args:
-        dna:        Validated GameDNA — determines tile set and weights
-        output_dir: /outputs/{demake_id}/ — tilemap.json written here
-        width:      Tilemap width in tiles (default 48 for platformer, else 30)
-        height:     Tilemap height in tiles (default 12 for platformer, else 20)
-        max_retries:WFC can hit contradictions — retry up to N times
-
-    Returns:
-        Tilemap dict with grid, tile definitions, and spawn points
+    Generate a tilemap for a demake. Dispatches to genre-specific
+    generation strategy, then builds the shared manifest output
+    (tile_defs, spawn_points, stats) for ALL genres — this part
+    must run regardless of which branch built the grid.
     """
-    if width is None:
-        width = 48 if dna.genre == "side_scroll_platformer" else 30
-    if height is None:
-        height = 12 if dna.genre == "side_scroll_platformer" else 20
+    genre = genre_override or dna.genre
 
-    genre   = dna.genre
+    if width is None or height is None:
+        default_w, default_h = GENRE_MAP_SIZE.get(genre, (30, 20))
+        width  = width  or default_w
+        height = height or default_h
+
     weights = GENRE_WEIGHTS.get(genre, GENRE_WEIGHTS["wave_shooter"])
-
     print(f"[TilemapGen] Generating {width}x{height} tilemap for {genre}")
 
-    grid = None
-    for attempt in range(max_retries):
-        wfc = WaveFunctionCollapse(width, height, genre, weights)
-        success = wfc.solve()
-        if success:
-            grid = wfc.get_result()
-            print(f"[TilemapGen] WFC solved on attempt {attempt + 1}")
-            break
-        print(f"[TilemapGen] WFC contradiction on attempt {attempt + 1} — retrying")
+    # ── Step 1: Get the base grid — genre-specific strategy ──────────────
+    if genre == "top_down_action_rpg":
+        # BSP dungeon builds AND decorates in one call.
+        # Do NOT also call _ensure_required_tiles — it would regenerate
+        # a second dungeon and discard this one.
+        grid = _generate_bsp_dungeon(width, height)
+        grid = _decorate_dungeon(grid, width, height)
 
-    if grid is None:
-        print("[TilemapGen] WFC failed all retries — using fallback grid")
-        grid = _fallback_grid(width, height, genre)
+    elif genre == "open_world_sandbox":
+        # Blank grid — _ensure_required_tiles carves the street grid +
+        # building-dominant blocks + spawns entirely from scratch.
+        grid = [["building" for _ in range(width)] for _ in range(height)]
+        grid = _ensure_required_tiles(grid, genre, width, height)
 
-    # Post-process to guarantee player/enemy spawns
-    grid = _ensure_required_tiles(grid, genre, width, height)
+    else:
+        # Standard WFC path — wave_shooter, side_scroll_platformer,
+        # turn_based_rpg (side_scroll and turn_based have their own
+        # post-process branches inside _ensure_required_tiles already)
+        grid = None
+        for attempt in range(max_retries):
+            wfc = WaveFunctionCollapse(width, height, genre, weights)
+            success = wfc.solve()
+            if success:
+                grid = wfc.get_result()
+                print(f"[TilemapGen] WFC solved on attempt {attempt + 1}")
+                break
+            print(f"[TilemapGen] WFC contradiction on attempt {attempt + 1} — retrying")
 
-    # Build tile definitions for frontend
-    tile_set    = TILE_SETS.get(genre, TILE_SETS["default"])
-    tile_defs   = {
+        if grid is None:
+            print("[TilemapGen] WFC failed all retries — using fallback grid")
+            grid = _fallback_grid(width, height, genre)
+
+        grid = _ensure_required_tiles(grid, genre, width, height)
+
+    # ── Step 2: Build manifest output — runs for EVERY genre ─────────────
+    tile_set  = TILE_SETS.get(genre, TILE_SETS["default"])
+    tile_defs = {
         tile_id: {
-            "display":     td.display,
-            "passable":    td.passable,
-            "spawn_enemy": td.spawn_enemy,
-            "spawn_player":td.spawn_player,
-            "spawn_item":  td.spawn_item,
-            "color":       td.color,
+            "display":      td.display,
+            "passable":     td.passable,
+            "spawn_enemy":  td.spawn_enemy,
+            "spawn_player": td.spawn_player,
+            "spawn_item":   td.spawn_item,
+            "color":        td.color,
         }
         for tile_id, td in tile_set.items()
     }
 
-    # Find spawn points
     player_spawns = [(x, y) for y in range(height) for x in range(width)
                      if grid[y][x] == "player"]
     enemy_spawns  = [(x, y) for y in range(height) for x in range(width)
@@ -485,20 +768,20 @@ def run_tilemap_gen(dna: GameDNA, output_dir: str,
         "grid":         grid,
         "tile_defs":    tile_defs,
         "spawn_points": {
-            "player": player_spawns[0] if player_spawns else [1, 1],
-            "enemies":enemy_spawns,
-            "items":  item_spawns,
+            "player":  player_spawns[0] if player_spawns else [1, 1],
+            "enemies": enemy_spawns,
+            "items":   item_spawns,
         },
         "stats": {
-            "total_tiles":  width * height,
-            "walkable":     sum(1 for y in range(height) for x in range(width)
+            "total_tiles": width * height,
+            "walkable":    sum(1 for y in range(height) for x in range(width)
                                if tile_set.get(grid[y][x], TileType("x","x",False)).passable),
-            "enemy_count":  len(enemy_spawns),
-            "item_count":   len(item_spawns),
+            "enemy_count": len(enemy_spawns),
+            "item_count":  len(item_spawns),
         }
     }
 
-    # Write to disk
+    # ── Step 3: Write to disk — runs for EVERY genre ──────────────────────
     tilemap_path = os.path.normpath(os.path.join(output_dir, "tilemap.json"))
     with open(tilemap_path, "w") as f:
         json.dump(tilemap, f, indent=2)
