@@ -857,19 +857,25 @@ shared systems inside `game.html`, then wire them into the scenes that need them
 
 **Plan & Scope:** Turn the minimal wanted-stars into a real GTA-style heat system.
 
-- [ ] `Police` group — distinct from civilians (blue tint), spawn at world edges
+- [x] `Police` group — distinct from civilians (blue tint), spawn at world edges
       when wanted rises: 1 cop per star, speed + damage scale with wanted level
-- [ ] Civilians no longer turn hostile — they always wander; police handle
+- [x] Civilians no longer turn hostile — they always wander; police handle
       all enforcement (removes old "everyone chases you" behavior)
-- [ ] Police contact damage scales with wanted level; death still possible
-- [ ] **Busted state**: at 3★+, if 2+ cops stay within grab range for 1.5s →
+- [x] Police contact damage scales with wanted level; death still possible
+- [x] **Busted state**: at 3★+, if 2+ cops stay within grab range for 1.5s →
       "BUSTED!" — lose half your cash, wanted resets to 0, cops disperse,
       player respawns at spawn point (arrest instead of death)
-- [ ] Wanted decay: 1 star drops every 20s without committing a crime (evade mechanic)
-- [ ] HUD: wanted stars flash while cops are actively chasing; transient
+- [x] Wanted decay: 1 star drops every 20s without committing a crime (evade mechanic)
+- [x] HUD: wanted stars flash while cops are actively chasing; transient
       "BUSTED! LOST HALF CASH" overlay on arrest
-- [ ] Smoke test `open_world_sandbox` clean (correct scene, no console errors)
-- [ ] **Deliverable:** manual run: attack NPC → 1★ cop chases → escalate to 3★ →
+- [x] Genre-aware procedural fallback maps for smoke testing (no-tilemap path):
+      city blocks with roads/buildings for open world, room dividers + pillars
+      for ARPG (was a featureless box before)
+- [x] Open world combat: SPACE fires a pistol (shared ProjectileSystem) instead of
+      melee — shooting a cop also raises wanted; cops have HP scaling with wanted
+- [x] Death screen now reads "WASTED!" — visually distinct from arrest ("BUSTED!")
+- [x] Smoke test `open_world_sandbox` clean (correct scene, no console errors)
+- [ ] **Deliverable:** manual run: shoot NPC → 1★ cop chases → escalate to 3★ →
       get busted → respawn with half cash → evade until stars decay to 0
 
 ### Sprint 8B–8E Completion Items
