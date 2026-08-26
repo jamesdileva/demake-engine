@@ -1,4 +1,4 @@
-﻿"""
+"""
 Sprint 9a â€” Godot 4 Project Export
 
 Generates a complete, runnable Godot 4 project from a demake manifest.
@@ -214,6 +214,10 @@ func _build_world() -> void:
 				var rshape := RectangleShape2D.new()
 				rshape.size = Vector2(TILE, TILE)
 				shape.shape = rshape
+				# Platform tiles are one-way — jump through from below
+				# (mirrors _platformCollide in game.html)
+				if tile_id == "platform":
+					shape.one_way_collision = true
 				body.add_child(shape)
 				# Shadow caster — walls block light (dungeon lighting, Sprint 9a)
 				var occ := LightOccluder2D.new()
@@ -1236,9 +1240,24 @@ func _physics_process(delta: float) -> void:
 	player.move_and_slide()
 	_animate_actors(delta)
 
+	# Pit check — fell into a ground gap (Sprint 9a audit fix)
+	if player.global_position.y > world_h + 32.0:
+		if _now_ms() > invincible_ms:
+			invincible_ms = _now_ms() + 1500
+			lives -= 1
+			hud_set("lives", "LIVES %d" % max(lives, 0))
+			if lives <= 0:
+				trigger_game_over("GAME OVER", Color.RED)
+				return
+		player.position = player_spawn_px
+		player.velocity = Vector2.ZERO
+
 	# Enemy patrol + stomp
 	for e in get_tree().get_nodes_in_group("enemies"):
 		if not is_instance_valid(e):
+			continue
+		if e.global_position.y > world_h + 32.0:
+			e.queue_free()  # fell into a pit
 			continue
 		e.velocity.x = float(e.get_meta("dir")) * float(e.get_meta("speed"))
 		e.move_and_slide()

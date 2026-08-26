@@ -498,29 +498,64 @@ def _ensure_required_tiles(grid: list[list[str]], genre: str,
     # ── Platformer-specific post-processing ──
     if genre == "side_scroll_platformer":
         sky_tile = next((t for t, td in tile_set.items() if t == "sky"), "sky")
+        coin_tile = next((t for t, td in tile_set.items()
+                          if t == "coin"), "coin")
+        enemy_tile = next((t for t, td in tile_set.items()
+                           if td.spawn_enemy), "enemy")
+        import random as _r
 
-        # Force bottom 2 rows as ground so player has a floor
-        for x in range(width):
-            for y in range(height - 2, height):
-                grid[y][x] = "ground"
-
-        # Clear duplicate player/goal tiles above ground (WFC places them randomly)
-        for y in range(height - 2):
+        # Deterministic Mario-style slice — reset everything to sky first so
+        # no stray WFC output floats around (Sprint 9a feedback: the map
+        # "needed work" — platforms/coins were never actually placed).
+        for y in range(height):
             for x in range(width):
-                if grid[y][x] in ("player", "goal"):
-                    grid[y][x] = sky_tile
+                grid[y][x] = sky_tile
 
-        # Player on left side, standing on ground
+        # Ground with occasional 2-wide gaps (jumpable)
+        gaps = []
+        for x in range(width):
+            grid[height - 2][x] = "ground"
+            grid[height - 1][x] = "ground"
+        gx = 14
+        while gx < width - 12:
+            if _r.random() < 0.55:
+                for dy in (height - 2, height - 1):
+                    grid[dy][gx] = sky_tile
+                    grid[dy][gx + 1] = sky_tile
+                gaps.append(gx)
+                gx += 7
+            else:
+                gx += 4
+
+        def _place_platform(px, py, pw):
+            for i in range(pw):
+                if 0 <= px + i < width and 0 <= py < height:
+                    grid[py][px + i] = "platform"
+
+        # Floating platforms — low tier and high tier
+        for px in range(6, width - 8, 9):
+            py = height - 5 if _r.random() < 0.6 else height - 7
+            _place_platform(px, py, _r.choice([2, 3, 4]))
+        for px in range(12, width - 10, 15):
+            _place_platform(px, height - 9, 2)
+
+        # Coins — sprinkled on platforms + arcs over gaps
+        for y in range(1, height - 2):
+            for x in range(width):
+                if grid[y][x] == "platform" and _r.random() < 0.5:
+                    grid[y - 1][x] = coin_tile
+        for gxp in gaps:
+            if height - 5 >= 0:
+                grid[height - 5][gxp] = coin_tile
+                grid[height - 6][gxp + 1] = coin_tile
+
+        # Player left, goal right, enemies patrolling ground
         grid[height - 3][3] = "player"
-
-        # Goal on far right, one row above ground
         grid[height - 3][width - 4] = "goal"
-
-        # Place enemies on ground row (height-2) at intervals
-        enemy_tile = next((t for t, td in tile_set.items() if td.spawn_enemy), None)
-        spawn_interval = max(6, (width - 8) // 4)
-        for ex in range(8, width - 4, spawn_interval):
-            grid[height - 2][ex] = enemy_tile or "enemy"
+        spawn_interval = max(8, (width - 10) // 4)
+        for ex in range(10, width - 6, spawn_interval):
+            if grid[height - 3][ex] == sky_tile:
+                grid[height - 3][ex] = enemy_tile
 
         return grid
 
@@ -532,15 +567,26 @@ def _ensure_required_tiles(grid: list[list[str]], genre: str,
         road_tile     = "road"
         sidewalk_tile = "sidewalk"
 
-        # Step 1 — fill EVERYTHING with block interior first
-        # (building-heavy so streets will visually contrast against it)
-        interior_weights = {"building": 6.0, "park": 2.0, "alley": 1.5}
-        interior_tiles   = list(interior_weights.keys())
-        interior_wts     = list(interior_weights.values())
+        # Step 1 — assign each city BLOCK a type (solid fill), not each tile.
+        # Per-tile weighted random read as green noise (Sprint 9a audit);
+        # solid blocks read as buildings.
+        block_types = {}
+        for by in range(6):
+            for bx in range(9):
+                roll = _r.random()
+                if roll < 0.62:
+                    block_types[(bx, by)] = "building"
+                elif roll < 0.82:
+                    block_types[(bx, by)] = "park"
+                else:
+                    block_types[(bx, by)] = "alley"
+
+        def _block_of(x, y):
+            return block_types.get((min(x * 9 // width, 8), min(y * 6 // height, 5)), "building")
 
         for y in range(height):
             for x in range(width):
-                grid[y][x] = _r.choices(interior_tiles, weights=interior_wts, k=1)[0]
+                grid[y][x] = _block_of(x, y)
 
         # Step 2 — carve a real street grid ON TOP, overwriting interior
         # Vertical streets every 6 tiles (road + sidewalk pair)

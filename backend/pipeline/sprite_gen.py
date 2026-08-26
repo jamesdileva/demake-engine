@@ -1,5 +1,5 @@
 """
-Sprint 3 — Sprite Generation Pipeline
+Sprint 3 â€” Sprite Generation Pipeline
 
 Uses Stable Diffusion 1.5 + LCM LoRA + pixel art LoRA to generate
 NES-style sprite sheets from the game DNA descriptions.
@@ -7,10 +7,10 @@ NES-style sprite sheets from the game DNA descriptions.
 Architecture doc reference:
   Run a highly quantized local Stable Diffusion model (SD 1.5 LCM with
   8-bit precision) fine-tuned on pixel art/spritesheets.
-  Never load sprite model and LLM simultaneously — pipeline is sequential.
+  Never load sprite model and LLM simultaneously â€” pipeline is sequential.
 
 VRAM strategy:
-  - SD 1.5 at bfloat16 ≈ 3.2GB VRAM
+  - SD 1.5 at bfloat16 â‰ˆ 3.2GB VRAM
   - LCM LoRA: 4-8 steps instead of 50 (much faster)
   - Unload model from VRAM after all sprites are done
   - CPU fallback if VRAM insufficient
@@ -27,7 +27,7 @@ from database.db import SessionLocal
 from database.models import Asset, AssetCache
 
 
-# ── Sprite slot definitions ────────────────────────────────────────────────────
+# â”€â”€ Sprite slot definitions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Each slot defines the canvas size and animation frames to generate.
 # Matches the architecture doc sprite output specs exactly.
 
@@ -36,37 +36,37 @@ SPRITE_SLOTS = {
         "canvas_w": 128, "canvas_h": 16,
         "frame_w":  16,  "frames": 8,
         "states":   ["idle", "idle", "walk", "walk", "walk", "walk", "shoot", "shoot"],
-        "gen_size": 64,   # SD generates at 64px, we tile frames
+        "gen_size": 256,  # hero gets top quality; post-processed to 16px frames
     },
     "sprite_enemy": {
         "canvas_w": 64, "canvas_h": 16,
         "frame_w":  16, "frames": 4,
         "states":   ["walk", "walk", "attack", "attack"],
-        "gen_size": 64,
+        "gen_size": 192,
     },
     "sprite_boss": {
         "canvas_w": 256, "canvas_h": 32,
         "frame_w":  32,  "frames": 6,
         "states":   ["idle", "idle", "walk", "walk", "attack", "attack"],
-        "gen_size": 128,
+        "gen_size": 256,
     },
     "sprite_projectile": {
         "canvas_w": 32, "canvas_h": 8,
         "frame_w":  8,  "frames": 2,
         "states":   ["fly", "fly"],
-        "gen_size": 64,   # Minimum 64 — DirectML crashes on smaller sizes
+        "gen_size": 128,
     },
     "tile_floor": {
         "canvas_w": 16, "canvas_h": 16,
         "frame_w":  16, "frames": 1,
         "states":   ["default"],
-        "gen_size": 64,   # Minimum 64 — DirectML crashes on smaller sizes
+        "gen_size": 128,
     },
     "tile_wall": {
         "canvas_w": 16, "canvas_h": 16,
         "frame_w":  16, "frames": 1,
         "states":   ["default"],
-        "gen_size": 64,   # Minimum 64 — DirectML crashes on smaller sizes
+        "gen_size": 128,
     },
 }
 
@@ -77,7 +77,7 @@ NEGATIVE_PROMPT = (
 )
 
 
-# ── Main entry point ───────────────────────────────────────────────────────────
+# â”€â”€ Main entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def run_sprite_gen(dna: GameDNA, output_dir: str, config: dict) -> dict[str, str]:
     """
@@ -85,11 +85,11 @@ def run_sprite_gen(dna: GameDNA, output_dir: str, config: dict) -> dict[str, str
 
     Args:
         dna:        Validated GameDNA from VLM analysis
-        output_dir: /outputs/{demake_id}/ — sprites written to sprites/ subdir
+        output_dir: /outputs/{demake_id}/ â€” sprites written to sprites/ subdir
         config:     Loaded config.yaml
 
     Returns:
-        Dict mapping slot_name → file_path for all generated sprites
+        Dict mapping slot_name â†’ file_path for all generated sprites
     """
     sprites_dir = os.path.normpath(os.path.join(output_dir, "sprites"))
     os.makedirs(sprites_dir, exist_ok=True)
@@ -97,7 +97,7 @@ def run_sprite_gen(dna: GameDNA, output_dir: str, config: dict) -> dict[str, str
     backend = _detect_backend(config)
 
     if backend == "procedural":
-        print("[SpriteGen] No SD backend available — using procedural sprites")
+        print("[SpriteGen] No SD backend available â€” using procedural sprites")
         results = _generate_procedural(dna, sprites_dir)
     else:
         try:
@@ -112,17 +112,17 @@ def run_sprite_gen(dna: GameDNA, output_dir: str, config: dict) -> dict[str, str
     return results
 
 
-# ── Backend detection ─────────────────────────────────────────────────────────
+# â”€â”€ Backend detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _detect_backend(config: dict) -> str:
     """
     Detect the best available SD backend for this machine.
 
     Priority order:
-      1. "cuda"      — NVIDIA GPU with CUDA (fastest)
-      2. "directml"  — AMD/Intel GPU via ONNX DirectML (your RX 6400)
-      3. "cpu"       — CPU only via ONNX (slowest, always works)
-      4. "procedural"— No SD at all, PIL fallback
+      1. "cuda"      â€” NVIDIA GPU with CUDA (fastest)
+      2. "directml"  â€” AMD/Intel GPU via ONNX DirectML (your RX 6400)
+      3. "cpu"       â€” CPU only via ONNX (slowest, always works)
+      4. "procedural"â€” No SD at all, PIL fallback
 
     Can be overridden in config.yaml:
       hardware:
@@ -169,9 +169,9 @@ def _generate_with_sd(dna: GameDNA, sprites_dir: str,
     """
     Dispatch to the correct SD backend based on detected hardware.
 
-    backend = "cuda"      → standard diffusers pipeline on NVIDIA
-    backend = "directml"  → ONNX pipeline on AMD/Intel via DirectML
-    backend = "cpu"       → ONNX pipeline on CPU (slow but works)
+    backend = "cuda"      â†’ standard diffusers pipeline on NVIDIA
+    backend = "directml"  â†’ ONNX pipeline on AMD/Intel via DirectML
+    backend = "cpu"       â†’ ONNX pipeline on CPU (slow but works)
     """
     if backend == "cuda":
         return _generate_cuda(dna, sprites_dir)
@@ -181,7 +181,7 @@ def _generate_with_sd(dna: GameDNA, sprites_dir: str,
         raise ValueError(f"Unknown backend: {backend}")
 
 
-# ── CUDA backend (NVIDIA only) ─────────────────────────────────────────────────
+# â”€â”€ CUDA backend (NVIDIA only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _generate_cuda(dna: GameDNA, sprites_dir: str) -> dict[str, str]:
     """Standard diffusers pipeline for NVIDIA GPUs."""
@@ -214,11 +214,11 @@ def _generate_cuda(dna: GameDNA, sprites_dir: str) -> dict[str, str]:
     return results
 
 
-# ── ONNX / DirectML backend (AMD RX 6400 + Intel) ────────────────────────────
+# â”€â”€ ONNX / DirectML backend (AMD RX 6400 + Intel) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _generate_onnx(dna: GameDNA, sprites_dir: str, backend: str) -> dict[str, str]:
     """
-    ONNX Runtime pipeline — works on AMD GPUs via DirectML on Windows.
+    ONNX Runtime pipeline â€” works on AMD GPUs via DirectML on Windows.
 
     First run: exports SD 1.5 to ONNX format (~5 min one-time cost, ~3GB disk).
     Subsequent runs: loads cached ONNX model (~30-60s load time).
@@ -240,7 +240,7 @@ def _generate_onnx(dna: GameDNA, sprites_dir: str, backend: str) -> dict[str, st
     # CPUExecutionProvider = CPU fallback
     provider = "DmlExecutionProvider" if backend == "directml" else "CPUExecutionProvider"
 
-    # ONNX model cache directory — exported once, reused every run
+    # ONNX model cache directory â€” exported once, reused every run
     onnx_cache = os.path.normpath(
         os.path.join(os.path.dirname(__file__), "..", "models", "sd15_onnx")
     )
@@ -249,7 +249,7 @@ def _generate_onnx(dna: GameDNA, sprites_dir: str, backend: str) -> dict[str, st
     unet_path = os.path.join(onnx_cache, "unet", "model.onnx")
 
     if not os.path.exists(unet_path):
-        print(f"[SpriteGen] First run — exporting SD 1.5 to ONNX format")
+        print(f"[SpriteGen] First run â€” exporting SD 1.5 to ONNX format")
         print(f"[SpriteGen] This takes ~5 minutes and ~3GB disk space. Only happens once.")
         print(f"[SpriteGen] Saving to: {onnx_cache}")
         pipe = ORTStableDiffusionPipeline.from_pretrained(
@@ -267,7 +267,7 @@ def _generate_onnx(dna: GameDNA, sprites_dir: str, backend: str) -> dict[str, st
         )
 
     print(f"[SpriteGen] Running on: {provider}")
-    print(f"[SpriteGen] Note: DirectML/ONNX is slower than CUDA — expect 2-8 min per sprite")
+    print(f"[SpriteGen] Note: DirectML/ONNX is slower than CUDA â€” expect 2-8 min per sprite")
 
     # ONNX pipeline uses more inference steps than LCM (no LCM LoRA support)
     # 20 steps is a good quality/speed balance for ONNX
@@ -279,7 +279,7 @@ def _generate_onnx(dna: GameDNA, sprites_dir: str, backend: str) -> dict[str, st
     return results
 
 
-# ── Shared generation loop ─────────────────────────────────────────────────────
+# â”€â”€ Shared generation loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _run_generation_loop(pipe, dna: GameDNA, sprites_dir: str,
                          steps: int, guidance: float,
@@ -298,11 +298,12 @@ def _run_generation_loop(pipe, dna: GameDNA, sprites_dir: str,
 
     for i, (slot_name, slot_cfg) in enumerate(SPRITE_SLOTS.items(), 1):
         if slot_name == "sprite_projectile" and template in NO_PROJECTILE_TEMPLATES:
-            print(f"[SpriteGen] ({i}/{total}) Skipping projectile — not needed for {template}")
+            print(f"[SpriteGen] ({i}/{total}) Skipping projectile â€” not needed for {template}")
             continue
         prompt    = _build_prompt(slot_name, dna, palette_str, slot_cfg)
-        # Include title in cache key — prevents cross-game sprite reuse
-        cache_key = hashlib.sha256(f"{dna.title_guess}:{prompt}".encode()).hexdigest()
+        # Include title + pipeline version in cache key â€” prevents cross-game
+        # sprite reuse AND stale pre-refactor sprites (v2 = 512px + postprocess)
+        cache_key = hashlib.sha256(f"v2:{dna.title_guess}:{prompt}".encode()).hexdigest()
 
         cached_path = _check_cache(cache_key)
         if cached_path:
@@ -363,21 +364,71 @@ def _build_prompt(slot_name: str, dna: GameDNA,
     return prompt
 
 
+def _postprocess_sprite(image: Image.Image, frame_w: int, frame_h: int) -> Image.Image:
+    """
+    Clean a raw SD generation into a crisp, readable pixel-art frame.
+
+    Steps (Sprint 9a audit):
+      1. Smooth-resize to a working canvas (LANCZOS keeps shapes coherent)
+      2. Background removal â€” border-color flood by distance threshold
+         ("transparent background" prompts rarely work on local SD)
+      3. Auto-crop to the sprite bounding box, center on a square canvas
+      4. Crisp NEAREST downscale to the target frame size
+      5. Median-cut palette quantization (NES-style limited palette)
+    """
+    WORK = 128
+    img = image.convert("RGB").resize((WORK, WORK), Image.LANCZOS)
+    px = img.load()
+
+    # 2. Estimate background color from the four corners (median per channel)
+    corners = [px[0, 0], px[WORK - 1, 0], px[0, WORK - 1], px[WORK - 1, WORK - 1]]
+    bg = tuple(sorted(c[i] for c in corners)[1] for i in range(3))
+
+    def _close(c1, c2, thresh=2400):
+        return sum((a - b) ** 2 for a, b in zip(c1[:3], c2)) < thresh
+
+    rgba = img.convert("RGBA")
+    data = rgba.load()
+    for y in range(WORK):
+        for x in range(WORK):
+            if _close(data[x, y], bg):
+                data[x, y] = (0, 0, 0, 0)
+
+    # 3. Crop to content, center on square
+    bbox = rgba.getbbox()
+    if bbox:
+        rgba = rgba.crop(bbox)
+    side = max(rgba.size)
+    sq = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    sq.paste(rgba, ((side - rgba.width) // 2, (side - rgba.height) // 2))
+
+    # 4. Crisp downscale to frame size
+    small = sq.resize((frame_w, frame_h), Image.NEAREST)
+
+    # 5. Palette quantization on visible pixels only
+    rgb = small.convert("RGB")
+    quantized = rgb.quantize(colors=10, method=Image.MEDIANCUT, dither=Image.NONE)
+    out = quantized.convert("RGBA")
+    out.putalpha(small.getchannel("A"))
+    return out
+
+
 def _build_spritesheet(image: Image.Image, slot_cfg: dict) -> Image.Image:
     """
-    Take a single SD-generated image and tile it into a proper spritesheet.
+    Take a single SD-generated image and turn it into a proper spritesheet.
 
-    SD generates one image per call. We resize it to the frame size
-    and repeat across the canvas with slight hue variation per frame
-    to fake animation until Sprint 4 adds proper multi-frame generation.
+    Sprint 9a audit fix â€” the old pipeline squashed the raw 64px SD output
+    straight to 16px, baking generation noise into every frame (the
+    "rainbow garbage" look). Now: background removal -> auto-crop -> center
+    -> crisp downscale -> palette quantization -> tile with hue variation.
     """
     frame_w  = slot_cfg["frame_w"]
     canvas_h = slot_cfg["canvas_h"]
     frames   = slot_cfg["frames"]
     canvas_w = slot_cfg["canvas_w"]
 
-    # Resize generated image to fit one frame
-    frame_img = image.resize((frame_w, canvas_h), Image.NEAREST)
+    # Post-process the raw SD image into one clean, tiny frame
+    frame_img = _postprocess_sprite(image, frame_w, canvas_h)
 
     # Build spritesheet
     sheet = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
@@ -394,11 +445,11 @@ def _vary_frame(img: Image.Image, frame_idx: int, total: int) -> Image.Image:
     from PIL import ImageEnhance
     # Slight brightness pulse: frames oscillate between 90% and 110% brightness
     t = frame_idx / max(total - 1, 1)
-    brightness = 0.92 + 0.16 * abs(t - 0.5) * 2   # 0.92 → 1.08 → 0.92
+    brightness = 0.92 + 0.16 * abs(t - 0.5) * 2   # 0.92 â†’ 1.08 â†’ 0.92
     return ImageEnhance.Brightness(img).enhance(brightness)
 
 
-# ── Asset cache helpers ────────────────────────────────────────────────────────
+# â”€â”€ Asset cache helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _check_cache(description_hash: str) -> str | None:
     """Check if this sprite description was generated before."""
@@ -427,10 +478,10 @@ def _write_cache(description_hash: str, file_path: str):
         db.close()
 
 
-# ── Procedural fallback ───────────────────────────────────────────────────────
+# â”€â”€ Procedural fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # When SD isn't available, generate pixel art programmatically using PIL.
 # These won't look as good but the game will still be fully playable.
-# The game engine (Sprint 0) already does this — we match that style here.
+# The game engine (Sprint 0) already does this â€” we match that style here.
 
 def _generate_procedural(dna: GameDNA, sprites_dir: str) -> dict[str, str]:
     """
