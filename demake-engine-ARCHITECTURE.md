@@ -819,8 +819,8 @@ WFC-generated map). The "full loop" depth work is partially done per genre:
 | 8A | Shared game systems (entities, inventory, projectiles) | ✅ SharedSystems/Inventory/ProjectileSystem wired into wave shooter + ARPG; chest→potion→heal loop verified |
 | 8B | Wave Shooter full loop | ✅ Waves, boss every N, ammo/reload, score, death |
 | 8C | Top Down ARPG full loop | 🔶 Melee + projectile magic + chest loot + room clear done; final-room boss deferred to completion items |
-| 8D | Open World full loop | 🔶 **IN PROGRESS** — escalation work started |
-| 8E | Turn Based full loop | 🔶 Overworld → random encounters → battle loop done; no gym/boss endpoint as win condition |
+| 8D | Open World full loop | ✅ Police escalation per star, busted/arrest state, wanted decay, pistol combat, WASTED/BUSTED split |
+| 8E | Turn Based full loop | 🔶 **IN PROGRESS** — gym/boss endpoint work started |
 
 ### Sprint 8A: Shared Game Systems — ✅ COMPLETE
 
@@ -853,7 +853,7 @@ shared systems inside `game.html`, then wire them into the scenes that need them
       projectile magic. Wave shooter unchanged behaviorally but on shared systems.
       *(Verified by user play-through)*
 
-### Sprint 8D Completion: Wanted System Escalation — 🚧 CURRENT SPRINT
+### Sprint 8D Completion: Wanted System Escalation — ✅ COMPLETE
 
 **Plan & Scope:** Turn the minimal wanted-stars into a real GTA-style heat system.
 
@@ -875,12 +875,35 @@ shared systems inside `game.html`, then wire them into the scenes that need them
       melee — shooting a cop also raises wanted; cops have HP scaling with wanted
 - [x] Death screen now reads "WASTED!" — visually distinct from arrest ("BUSTED!")
 - [x] Smoke test `open_world_sandbox` clean (correct scene, no console errors)
-- [ ] **Deliverable:** manual run: shoot NPC → 1★ cop chases → escalate to 3★ →
+- [x] **Deliverable:** manual run: shoot NPC → 1★ cop chases → escalate to 3★ →
       get busted → respawn with half cash → evade until stars decay to 0
+      *(Verified by user play-through)*
+
+### Sprint 8E Completion: Gym Boss Endpoint — 🚧 CURRENT SPRINT
+
+**Plan & Scope:** Give the turn-based loop a real win condition: a gym boss at the
+end of the overworld route, replacing "survive N encounters" as the goal.
+
+**Backend (`tilemap_gen.py`):**
+- [ ] `gym` tile type in the turn_based_rpg tile set (passable, triggers boss battle
+      on step; visually distinct red + "G" marker in the renderer)
+- [ ] Turn-based map generation places the gym at the path's destination
+      (bottom-right), with the approach kept clear of trees
+
+**Frontend (`game.html`):**
+- [ ] `TurnOverworldScene`: stepping on a gym tile triggers a boss battle
+      (also a fallback gym position in the no-tilemap smoke path)
+- [ ] `TurnBasedScene`: boss battle mode — enemy HP scaled by `boss.hp_mult`,
+      larger sprite, "GYM LEADER BATTLE" label
+- [ ] Boss win → "VICTORY! GYM BADGE EARNED!" end screen (the run's win condition);
+      boss loss → return to overworld at the gym entrance to heal and retry
+- [ ] Smoke test `turn_based_rpg` clean
+- [ ] **Deliverable:** manual run: fight encounters to level up → reach gym →
+      beat the gym leader → victory screen
 
 ### Sprint 8B–8E Completion Items
 
-- [ ] 8D: wanted-star escalation (police NPC spawn rate/damage scales per star),
+- [x] 8D: wanted-star escalation (police NPC spawn rate/damage scales per star),
       busted state when surrounded at 3+ stars (arrest instead of death)
 - [ ] 8E: gym/boss arena tile type in WFC tileset → final boss battle as win condition
       (replaces "N encounters" counter)

@@ -302,6 +302,12 @@ class TilemapRenderer {
           this.scene.add.text(px-4, py-5, '★',
             { fontSize: '8px', color: '#ffff00' }).setDepth(3);
         }
+        if (tileId === 'gym') {
+          this.scene.add.rectangle(px, py, tw-2, tw-2, 0xaa3333, 0.9).setDepth(3);
+          this.scene.add.text(px-5, py-6, 'G',
+            { fontSize: '10px', color: '#ffdddd',
+              stroke: '#000000', strokeThickness: 2 }).setDepth(4);
+        }
       }
     }
 
@@ -2250,6 +2256,17 @@ class TurnOverworldScene extends Phaser.Scene {
     this.worldH = worldHeight;
     this.tileGrid = MANIFEST?.tilemap?.grid;
 
+    // No tilemap (smoke path) — virtual gym so the boss loop is testable (Sprint 8E)
+    this.fallbackGym = null;
+    if (!this.tileGrid) {
+      this.fallbackGym = { x: worldWidth * 0.72, y: worldHeight * 0.72 };
+      const g = this.add.rectangle(this.fallbackGym.x, this.fallbackGym.y, 16, 16, 0xaa3333).setDepth(3);
+      g.setStrokeStyle(1, 0xffdddd);
+      this.add.text(this.fallbackGym.x - 5, this.fallbackGym.y - 6, 'G',
+        { fontSize: '10px', color: '#ffdddd',
+          stroke: '#000000', strokeThickness: 2 }).setDepth(4);
+    }
+
     // ── Player ───────────────────────────────────────────────
     const startX = this.returnX || playerSpawn.x;
     const startY = this.returnY || playerSpawn.y;
@@ -2304,6 +2321,14 @@ class TurnOverworldScene extends Phaser.Scene {
       if (this.anims.exists('player_idle')) this.player.play('player_idle', true);
     }
 
+    // ── Gym — boss battle / win condition (Sprint 8E) ─────────
+    if (this.fallbackGym && !this.gymBeaten &&
+        Phaser.Math.Distance.Between(this.player.x, this.player.y,
+          this.fallbackGym.x, this.fallbackGym.y) < 20) {
+      this._triggerBossBattle();
+      return;
+    }
+
     // ── Check tile under player ─────────────────────────────
     if (!this.tileGrid) return;
     const tx = Math.floor(this.player.x / TILE);
@@ -2328,6 +2353,33 @@ class TurnOverworldScene extends Phaser.Scene {
       this.playerMp = this.maxMp;
       this.events.emit('healed');
     }
+
+    // ── Gym — boss battle / win condition (Sprint 8E) ─────────
+    if (tileId === 'gym' && !this.gymBeaten) {
+      this._triggerBossBattle();
+      return;
+    }
+  }
+
+  _triggerBossBattle() {
+    const cfg = MANIFEST.game_config;
+    const bossMult = cfg.boss?.hp_mult || 5;
+    const enemyHp = Math.floor((cfg.enemy?.base_hp || 60) * bossMult);
+    this.scene.start('TurnBasedScene', {
+      fromOverworld: true,
+      isBoss: true,
+      playerHp: this.playerHp,
+      playerMp: this.playerMp,
+      maxHp: this.maxHp,
+      maxMp: this.maxMp,
+      overworldScore: this.overworldScore,
+      encounters: this.encounters,
+      maxEncounters: this.maxEncounters,
+      returnX: this.player.x,
+      returnY: this.player.y,
+      enemyHp,
+      battleNum: this.encounters + 1,
+    });
   }
 
   _triggerBattle() {
@@ -2390,6 +2442,7 @@ class TurnBasedScene extends Phaser.Scene {
   init(data) {
     this._initData = data || {};
     this.fromOverworld = this._initData.fromOverworld || false;
+    this.isBoss = this._initData.isBoss || false;  // Sprint 8E
     if (this.fromOverworld) {
       this.playerHp  = this._initData.playerHp;
       this.playerMp  = this._initData.playerMp;
@@ -2445,7 +2498,7 @@ class TurnBasedScene extends Phaser.Scene {
 
     // ── Enemy sprite (large, top right) ───────────────────────
     this.enemySprite = this.add.image(320, 110, 'boss', 0)
-      .setDepth(5).setScale(3).setFlipX(false);
+      .setDepth(5).setScale(this.isBoss ? 4.5 : 3).setFlipX(false);
     if (!this.textures.get('boss').has(0)) {
       // Fallback colored rectangle
       const g = this.make.graphics({add:false});
@@ -2462,8 +2515,10 @@ class TurnBasedScene extends Phaser.Scene {
     this.enemyHpBar = this.add.rectangle(260, 52, 120, 8, 0xff2200, 1).setDepth(8).setOrigin(0, 0.5);
     this.enemyHpText = this.add.text(260, 42, `HP ${this.enemyHp}/${this.enemyMaxHp}`,
       { fontSize:'7px', fontFamily:'Courier New', color:'#ff8888' }).setDepth(9);
-    this.battleLabel = this.add.text(260, 32, `BATTLE ${this.battle+1}/${this.maxBattles}`,
-      { fontSize:'7px', fontFamily:'Courier New', color:'#888' }).setDepth(9);
+    this.battleLabel = this.add.text(260, 32,
+      this.isBoss ? 'GYM LEADER BATTLE' : `BATTLE ${this.battle+1}/${this.maxBattles}`,
+      { fontSize:'7px', fontFamily:'Courier New',
+        color: this.isBoss ? '#ff6666' : '#888' }).setDepth(9);
 
     // ── Player sprite (small, bottom left) ────────────────────
     this.playerSprite = this.add.image(120, 185, 'player', 0)
@@ -2588,7 +2643,8 @@ class TurnBasedScene extends Phaser.Scene {
   }
 
   _enemyTurn() {
-    const atkCfg = MANIFEST.game_config.enemy?.base_attack || 15;
+    const bossMult = this.isBoss ? (MANIFEST.game_config.boss?.attack_mult || 2) : 1;
+    const atkCfg = (MANIFEST.game_config.enemy?.base_attack || 15) * bossMult;
     const dmg = atkCfg + Phaser.Math.Between(-4, 4);
     this.playerHp -= dmg;
     this._log(`Enemy attacks for ${dmg} damage!`);
@@ -2610,6 +2666,28 @@ class TurnBasedScene extends Phaser.Scene {
     this.battle++;
     const totalScore = this.overworldScore + this.score;
     if (won) this.playerMp = Math.min(this.maxMp, this.playerMp + 5); // Restore some MP
+
+    // ── Gym boss — the run's win condition (Sprint 8E) ────────
+    if (this.isBoss) {
+      if (won) {
+        this._showEndScreen('VICTORY! GYM BADGE EARNED!', '#44ff44',
+          totalScore + 1000, `BATTLES WON: ${this.encounters + 1}`);
+      } else {
+        // Loss — return to overworld at the gym entrance to heal and retry
+        this.time.delayedCall(1200, () => {
+          this.scene.start('TurnOverworldScene', {
+            playerHp: Math.max(1, Math.floor(this.maxHp * 0.3)),
+            playerMp: this.playerMp,
+            overworldScore: totalScore,
+            encounters: this.encounters,
+            maxEncounters: this.maxEncounters,
+            returnX: this.returnX,
+            returnY: this.returnY,
+          });
+        });
+      }
+      return;
+    }
 
     if (this.fromOverworld) {
       // Return to overworld after single battle
@@ -2661,7 +2739,7 @@ class TurnBasedScene extends Phaser.Scene {
     }
   }
 
-  _showEndScreen(title, color, finalScore) {
+  _showEndScreen(title, color, finalScore, subtitle) {
     const s = finalScore ?? this.score;
     this.add.rectangle(W/2,H/2,W,H,0x000000,0.8).setDepth(40);
     this.add.text(W/2,H/2-25, title,
@@ -2670,7 +2748,7 @@ class TurnBasedScene extends Phaser.Scene {
     this.add.text(W/2,H/2+5, `SCORE: ${s}`,
       { fontSize:'11px', fontFamily:'Courier New', color:'#ffcc00' })
       .setDepth(41).setOrigin(0.5);
-    this.add.text(W/2,H/2+22, `BATTLES WON: ${this.battle}/${this.maxBattles}`,
+    this.add.text(W/2,H/2+22, subtitle ?? `BATTLES WON: ${this.battle}/${this.maxBattles}`,
       { fontSize:'9px', fontFamily:'Courier New', color:'#aaaaaa' })
       .setDepth(41).setOrigin(0.5);
     this.add.text(W/2,H/2+38, 'REFRESH TO RETRY',

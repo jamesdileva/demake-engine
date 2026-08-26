@@ -86,6 +86,7 @@ TILE_SETS = {
         "water":    TileType("water",    "Water",         False, color="#1a4a8a"),
         "player":   TileType("player",   "Player Start",  True,  spawn_player=True, color="#00ff88"),
         "town":     TileType("town",     "Town Building", True,  spawn_item=True, color="#cc8844"),
+        "gym":      TileType("gym",      "Gym/Boss Arena",True,  color="#aa3333"),
     },
 }
 
@@ -137,14 +138,15 @@ ADJACENCY_RULES = {
         "goal":     {"sky", "platform"},
     },
     "turn_based_rpg": {
-        "grass":     {"grass", "path", "tree", "tall_grass", "water", "building", "player", "town"},
-        "path":      {"grass", "path", "tree", "tall_grass", "building", "town", "player", "water"},
+        "grass":     {"grass", "path", "tree", "tall_grass", "water", "building", "player", "town", "gym"},
+        "path":      {"grass", "path", "tree", "tall_grass", "building", "town", "player", "water", "gym"},
         "tree":      {"grass", "tree", "path", "tall_grass", "building", "water"},
         "building":  {"grass", "path", "building", "tree", "tall_grass", "town"},
         "tall_grass":{"grass", "tall_grass", "tree", "path", "building", "water", "town"},
         "water":     {"water", "grass", "tall_grass", "path", "tree"},
         "player":    {"grass", "path"},
         "town":      {"grass", "path", "building", "tall_grass"},
+        "gym":       {"path", "grass"},
     },
 }
 
@@ -617,6 +619,16 @@ def _ensure_required_tiles(grid: list[list[str]], genre: str,
                 elif path_y < target_y: path_y += 1
                 elif path_y > target_y: path_y -= 1
                 grid[path_y][path_x] = "path"
+
+            # Gym — boss arena at the path's destination (Sprint 8E).
+            # Keep the approach clear so the player can always reach it.
+            grid[target_y][target_x] = "gym"
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    ny, nx = target_y + dy, target_x + dx
+                    if 0 <= ny < height and 0 <= nx < width:
+                        if grid[ny][nx] in ("tree", "water", "building"):
+                            grid[ny][nx] = "path"
 
             import random as _r
             for _ in range(6):
