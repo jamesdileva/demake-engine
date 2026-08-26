@@ -1777,18 +1777,36 @@ class TopDownRPGScene extends Phaser.Scene {
     if (this.anims.exists('player_idle')) this.player.play('player_idle');
 
     // ── Enemies ───────────────────────────────────────────────
+    // Sprint 9a — final-room boss: the spawn farthest from the player start
+    // is the boss (6x HP, slower, 2x damage, big sprite).
     this.enemies = this.physics.add.group();
+    this.boss = null;
     const spd = cfg.enemy?.base_speed || 45;
     const hp  = cfg.enemy?.base_hp    || 50;
-    (tileEnemySpawns.length > 0 ? tileEnemySpawns
-      : [{ x: 80, y: 80 }, { x: 400, y: 80 }, { x: 80, y: 240 }, { x: 400, y: 240 }, { x: worldWidth/2, y: worldHeight/2 }]
-    ).forEach(({ x, y }) => {
-      const e = this.enemies.create(x, y, 'enemy', 0);
-      e.setDepth(5).setScale(1.2);
-      e.body.setSize(12, 12);
-      e.hp = hp; e.maxHp = hp; e.speed = spd;
+    const spawnList = tileEnemySpawns.length > 0 ? tileEnemySpawns
+      : [{ x: 80, y: 80 }, { x: 400, y: 80 }, { x: 80, y: 240 }, { x: 400, y: 240 }, { x: worldWidth/2, y: worldHeight/2 }];
+    let farD = -1;
+    spawnList.forEach(s => {
+      const d = Phaser.Math.Distance.Between(playerSpawn.x, playerSpawn.y, s.x, s.y);
+      if (d > farD) farD = d;
+    });
+    spawnList.forEach(({ x, y }) => {
+      const isBoss = Phaser.Math.Distance.Between(playerSpawn.x, playerSpawn.y, x, y) === farD;
+      const e = this.enemies.create(x, y, isBoss ? 'boss' : 'enemy', 0);
+      e.setDepth(5).setScale(isBoss ? 2.2 : 1.2);
+      e.body.setSize(isBoss ? 20 : 12, isBoss ? 20 : 12);
+      e.hp = isBoss ? hp * 6 : hp; e.maxHp = e.hp;
+      e.speed = isBoss ? spd * 0.8 : spd;
+      e.damageMult = isBoss ? 2.0 : 1.0;
+      e.isBoss = isBoss;
       e.lastDamage = 0;
-      if (this.anims.exists('enemy_walk')) e.play('enemy_walk');
+      if (isBoss) {
+        this.boss = e;
+        if (this.anims.exists('boss_idle')) e.play('boss_idle');
+        SharedSystems.floatText(this, x, y - 20, 'BOSS', '#ff6666');
+      } else if (this.anims.exists('enemy_walk')) {
+        e.play('enemy_walk');
+      }
     });
 
     // ── Collisions ────────────────────────────────────────────
@@ -1818,7 +1836,7 @@ class TopDownRPGScene extends Phaser.Scene {
     const now = this.time.now;
     if (now - enemy.lastDamage < 800) return;
     enemy.lastDamage = now;
-    const dmg = MANIFEST.game_config.enemy?.damage || 15;
+    const dmg = (MANIFEST.game_config.enemy?.damage || 15) * (enemy.damageMult || 1);
     this.hp -= dmg;
     this.events.emit('hpChanged', this.hp);
     this.cameras.main.shake(80, 0.008);
@@ -1864,13 +1882,20 @@ class TopDownRPGScene extends Phaser.Scene {
     return true;
   }
 
+  // ── Shared kill: boss bonus + float text (Sprint 9a) ──
+  _killEnemy(e, points) {
+    const bonus = e.isBoss ? 1000 : 0;
+    this.score += points + bonus;
+    this.events.emit('scoreChanged', this.score);
+    if (e.isBoss) SharedSystems.floatText(this, e.x, e.y - 20, 'BOSS DOWN!', '#ffcc00');
+    e.destroy();
+  }
+
   // ── Magic bolt hit — Sprint 8A ──
   _magicHit(proj, enemy) {
     proj.destroy();
     if (SharedSystems.applyDamage(this, enemy, proj.damage || 30, { tint: 0x8800ff })) {
-      this.score += 150;
-      this.events.emit('scoreChanged', this.score);
-      enemy.destroy();
+      this._killEnemy(enemy, 150);
     }
   }
 
@@ -1908,9 +1933,7 @@ class TopDownRPGScene extends Phaser.Scene {
           const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, e.x, e.y);
           if (dist < range) {
             if (SharedSystems.applyDamage(this, e, atk)) {
-              this.score += 100;
-              this.events.emit('scoreChanged', this.score);
-              e.destroy();
+              this._killEnemy(e, 100);
             }
           }
         });

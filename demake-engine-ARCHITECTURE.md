@@ -818,9 +818,10 @@ WFC-generated map). The "full loop" depth work is partially done per genre:
 |---|---|---|
 | 8A | Shared game systems (entities, inventory, projectiles) | ✅ SharedSystems/Inventory/ProjectileSystem wired into wave shooter + ARPG; chest→potion→heal loop verified |
 | 8B | Wave Shooter full loop | ✅ Waves, boss every N, ammo/reload, score, death |
-| 8C | Top Down ARPG full loop | 🔶 Melee + projectile magic + chest loot + room clear done; final-room boss deferred to completion items |
+| 8C | Top Down ARPG full loop | 🔶 Melee + projectile magic + chest loot + room clear done; final-room boss **moved into Sprint 9a** (built for Phaser + Godot together) |
 | 8D | Open World full loop | ✅ Police escalation per star, busted/arrest state, wanted decay, pistol combat, WASTED/BUSTED split |
 | 8E | Turn Based full loop | ✅ Gym tile at route's end → gym leader boss battle → badge victory; boss loss returns to overworld |
+| 8F | Genre-Only Mode (-1) | ✅ POST /generate + seeded DNA synthesizer + two-mode UI; verified end-to-end (wave_shooter seed 42, ARPG seed 7) |
 
 ### Sprint 8A: Shared Game Systems — ✅ COMPLETE
 
@@ -909,9 +910,10 @@ end of the overworld route, replacing "survive N encounters" as the goal.
       busted state when surrounded at 3+ stars (arrest instead of death)
 - [x] 8E: gym/boss arena tile type in WFC tileset → final boss battle as win condition
       (replaces "N encounters" counter)
-- [ ] 8C: boss enemy in final dungeon room (leverages shared systems from 8A)
+- [x] 8C: boss enemy in final dungeon room — **moved into Sprint 9a** (built for both
+      Phaser and Godot together; skipped as a standalone item)
 
-### Sprint 8F: Genre-Only Mode ("Mode -1") — 🚧 CURRENT SPRINT (code done, play-test pending)
+### Sprint 8F: Genre-Only Mode ("Mode -1") — ✅ COMPLETE
 
 **Goal:** Generate a small, fully-fleshed playable world slice from just a genre pick.
 No trailer upload, no VLM call, no video processing — instant demakes.
@@ -955,18 +957,43 @@ Scoped to trailer mode; genre-only mode is unaffected.
 player; Godot is an additional downloadable artifact per demake.
 
 - [ ] New backend module `backend/pipeline/godot_export.py`: given a manifest, emit a
-      complete Godot 4 project folder:
-      - `project.godot` (viewport 480×320, pixel-art texture settings, input map)
-      - `main.gd` + one GDScript scene script per genre template, mirroring the
-        Phaser template classes (WaveShooter.tscn/gd, TopDownRPG, OpenWorld,
-        Platformer, TurnBased)
-      - Sprites copied into `assets/` with `.import` hints; tilemap grid →
-        Godot `TileMapLayer` node data or generated `TileSet` resource
-      - Audio: MIDI → converted OGG/WAV at export time (Godot has no native MIDI playback)
-      - Spawn points from the WFC tilemap map to node placement in each scene
-- [ ] API: `GET /api/v1/demake/{id}/godot` → zipped project download
-- [ ] Verify round-trip: open generated project in Godot editor, press Play,
-      gameplay matches the browser version for at least wave_shooter + top_down_action_rpg
+### Sprint 9a: Godot Export — 🚧 CURRENT SPRINT *(Godot chosen; ARPG boss folded in from 8C)*
+
+**Decision:** Unity is out. **Godot 4** is the export target (already installed locally).
+
+**Deliverable:** a manifest → Godot project generator. Phaser remains the live browser
+player; Godot is an additional downloadable artifact per demake.
+
+**Approach:** ship the manifest JSON inside the project and build the world at runtime
+in GDScript (colored-rect tiles + static bodies, mirroring `TilemapRenderer`), so no
+TileSet resource authoring is needed. Genre scripts extend a shared base script,
+exactly like the Phaser template architecture.
+
+- [x] New backend module `backend/pipeline/godot_export.py`: given a manifest +
+      output dir, emit a complete Godot 4 project folder:
+      - `project.godot` (viewport 480×320, nearest-neighbor filtering, input map)
+      - `scenes/main.tscn` + `scripts/main.gd` (thin dispatcher, extends genre script)
+      - `scripts/base.gd` — shared: manifest load, palette, tilemap build, sprite
+        frame slicing from spritesheets, spawn placement
+      - `scripts/genres/*.gd` — one per genre template mirroring the Phaser scenes
+      - Sprites copied from `outputs/{id}/sprites/` into `assets/sprites/`
+      - `manifest.json` copied into the project root
+- [x] Genre parity (full for wave_shooter + ARPG; playable-basic for the rest):
+      - wave_shooter: WASD + mouse-aim shooting, waves, boss every N, ammo/reload
+      - top_down_action_rpg: melee + magic bolt, chests/potions, **final-room boss**
+        (8C item — farthest spawn = boss: 6× HP, 2× damage, big sprite, +1000 bonus)
+      - open_world_sandbox: movement, NPCs, wanted stars + police, missions, busted
+      - side_scroll_platformer: gravity, jump, stomp kills, coins, goal flag
+      - turn_based_rpg: overworld + encounter zones + menu battle + gym boss + badge
+      - Audio: deferred — Godot has no native MIDI playback; runtime chiptune synth
+        is a stretch goal, not a blocker
+- [x] API: `GET /api/v1/demake/{id}/godot` → zipped project download (generated
+      on demand, sprites embedded, asset URLs rewritten to `res://`)
+- [x] Headless validation: `godot --headless --quit-after 180` runs clean (no
+      script errors) for generated wave_shooter + top_down_action_rpg projects
+- [ ] **Deliverable:** open a generated project in the Godot editor, press Play,
+      gameplay matches the browser version *(headless-verified — editor play-test
+      pending)*
 
 ### Sprint 10: IGDB Title Lookup ⬜
 Known game titles skip VLM analysis entirely — look up cover art/screenshots/metadata

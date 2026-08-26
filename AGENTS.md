@@ -46,5 +46,6 @@ Never commit unrelated files. Runtime artifacts (`demake.db`, `__pycache__/`,
 
 ## Current position
 
-Sprints 0–7 complete. Sprint 8 series (full gameplay loops) in progress — see the
-status table in Section 12 of the architecture doc for per-genre state.
+Sprints 0–8 complete (8C's ARPG boss was folded into 9a). Sprint 9a (Godot export)
+in progress — exporter + zip endpoint + headless validation done; editor play-test
+pending. See Section 12 of the architecture doc for per-sprint state.

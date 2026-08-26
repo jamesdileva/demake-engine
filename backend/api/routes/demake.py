@@ -250,6 +250,43 @@ def get_manifest(demake_id: str, db: Session = Depends(get_db)):
         return json.load(f)
 
 
+# ── GET /api/v1/demake/{id}/godot (Sprint 9a — Godot project download) ─────────
+@router.get("/{demake_id}/godot")
+def get_godot_project(demake_id: str, db: Session = Depends(get_db)):
+    """
+    Generate (on demand) and return a zipped Godot 4 project for this demake.
+    Requires the manifest to be ready.
+    """
+    demake = db.query(Demake).filter_by(id=demake_id).first()
+    if not demake:
+        raise HTTPException(status_code=404, detail="Demake not found.")
+
+    manifest_path = os.path.join(OUTPUT_DIR, demake_id, "manifest.json")
+    if not os.path.exists(manifest_path):
+        raise HTTPException(
+            status_code=409,
+            detail="Manifest not ready — wait for the pipeline to finish."
+        )
+
+    from pipeline.godot_export import generate_godot_project, zip_project
+
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+
+    project_dir = os.path.join(OUTPUT_DIR, demake_id, "godot_project")
+    zip_path = os.path.join(OUTPUT_DIR, demake_id, "godot_project.zip")
+    generate_godot_project(manifest, os.path.join(OUTPUT_DIR, demake_id),
+                           project_dir)
+    zip_project(project_dir, zip_path)
+
+    safe_title = (demake.title or "demake").replace(" ", "_")[:30]
+    return FileResponse(
+        zip_path,
+        media_type="application/zip",
+        filename=f"godot_{safe_title}_{demake_id[:8]}.zip",
+    )
+
+
 # ── GET /api/v1/demake/{id}/asset/{filename} ──────────────────────────────────
 @router.get("/{demake_id}/asset/{filename}")
 def get_asset(demake_id: str, filename: str, db: Session = Depends(get_db)):
