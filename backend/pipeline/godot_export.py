@@ -215,7 +215,18 @@ func _build_world() -> void:
 				rshape.size = Vector2(TILE, TILE)
 				shape.shape = rshape
 				body.add_child(shape)
+				# Shadow caster — walls block light (dungeon lighting, Sprint 9a)
+				var occ := LightOccluder2D.new()
+				var poly := OccluderPolygon2D.new()
+				poly.polygon = PackedVector2Array([
+					Vector2(-TILE / 2.0, -TILE / 2.0), Vector2(TILE / 2.0, -TILE / 2.0),
+					Vector2(TILE / 2.0, TILE / 2.0), Vector2(-TILE / 2.0, TILE / 2.0)])
+				occ.occluder = poly
+				body.add_child(occ)
 				walls_node.add_child(body)
+
+			if tile_id == "torch":
+				torch_spawn_px.append(Vector2(px + TILE / 2.0, py + TILE / 2.0))
 
 	# Spawn points
 	var sp = tm.get("spawn_points", {})
@@ -233,6 +244,47 @@ func _build_world() -> void:
 var player_spawn_px := Vector2(60, 160)
 var enemy_spawn_px: Array[Vector2] = []
 var item_spawn_px: Array[Dictionary] = []
+var torch_spawn_px: Array[Vector2] = []
+
+
+# ── 2D lighting (dungeon/city mood — reusable across genres) ──────────────────
+
+var _light_tex: GradientTexture2D = null
+
+func _get_light_tex() -> GradientTexture2D:
+	if _light_tex == null:
+		var g := Gradient.new()
+		g.colors = PackedColorArray([Color(1, 1, 1, 1), Color(1, 1, 1, 0)])
+		_light_tex = GradientTexture2D.new()
+		_light_tex.gradient = g
+		_light_tex.fill = GradientTexture2D.FILL_RADIAL
+		_light_tex.fill_from = Vector2(0.5, 0.5)
+		_light_tex.fill_to = Vector2(0.5, 0.0)
+		_light_tex.width = 256
+		_light_tex.height = 256
+	return _light_tex
+
+
+func add_light(pos: Vector2, color: Color, energy: float, radius_px: float,
+		shadows := false, parent: Node2D = null) -> PointLight2D:
+	var l := PointLight2D.new()
+	l.texture = _get_light_tex()
+	l.color = color
+	l.energy = energy
+	l.texture_scale = radius_px / 128.0
+	l.shadow_enabled = shadows
+	l.position = pos
+	if parent != null:
+		parent.add_child(l)
+	else:
+		add_child(l)
+	return l
+
+
+func set_ambient(color: Color) -> void:
+	var cm := CanvasModulate.new()
+	cm.color = color
+	add_child(cm)
 
 
 func _build_fallback_arena() -> void:
@@ -751,6 +803,7 @@ var _attack_cd := 0.0
 var _magic_cd := 0.0
 var potions := 0
 var boss: CharacterBody2D = null
+var torch_lights: Array[PointLight2D] = []
 
 
 func _genre_setup() -> void:
@@ -810,8 +863,28 @@ func _genre_setup() -> void:
 	hud_text("mp", Vector2(120, 6), "MP %d/%d" % [mp, max_mp])
 	hud_text("pot", Vector2(230, 6), "")
 	hud_text("score", Vector2(380, 6), "SCORE 0")
+
+	# ── Dungeon mood — Godot-only upgrade (Sprint 9a) ────────────
+	# Darkness + player lantern + flickering torches + shadow-casting walls.
+	set_ambient(Color(0.36, 0.33, 0.42))
+	add_light(Vector2.ZERO, Color(1.0, 0.9, 0.72), 1.2, 220.0, true, player)
+	for tpos in torch_spawn_px:
+		var tl := add_light(tpos, Color(1.0, 0.55, 0.2), 1.3, 110.0, true)
+		tl.set_meta("flicker_seed", tpos.x * 0.7 + tpos.y * 1.3)
+		torch_lights.append(tl)
+	if boss != null:
+		add_light(Vector2.ZERO, Color(1.0, 0.25, 0.15), 0.9, 130.0, false, boss)
 	if boss != null:
 		show_center_message("THE BOSS AWAITS...", Color(1, 0.4, 0.3))
+
+
+func _flicker_torches() -> void:
+	var t := _now_ms()
+	for l in torch_lights:
+		if not is_instance_valid(l):
+			continue
+		var s := float(l.get_meta("flicker_seed"))
+		l.energy = 1.15 + 0.2 * sin(t / 90.0 + s) + 0.08 * sin(t / 37.0 + s * 2.0)
 
 
 func _process(delta: float) -> void:
@@ -863,7 +936,8 @@ func _genre_update(delta: float) -> void:
 				if hp <= 0:
 					trigger_game_over("YOU DIED", Color.RED)
 
-	_animate_actors(delta)
+	_flicker_torches()
+	_process_bullets(delta)
 	_process_bullets(delta)
 
 	# Win â€” everything dead, boss included
