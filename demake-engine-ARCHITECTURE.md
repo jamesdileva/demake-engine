@@ -911,29 +911,37 @@ end of the overworld route, replacing "survive N encounters" as the goal.
       (replaces "N encounters" counter)
 - [ ] 8C: boss enemy in final dungeon room (leverages shared systems from 8A)
 
-### Sprint 8F: Genre-Only Mode ("Mode -1") — NEW
+### Sprint 8F: Genre-Only Mode ("Mode -1") — 🚧 CURRENT SPRINT (code done, play-test pending)
 
 **Goal:** Generate a small, fully-fleshed playable world slice from just a genre pick.
 No trailer upload, no VLM call, no video processing — instant demakes.
 
 **Backend:**
-- [ ] New endpoint `POST /api/v1/demake/generate` accepting `{ "genre": "<template_id>" }`
-- [ ] DNA synthesizer: builds `game_dna.json` from the genre template defaults +
-      seeded random variation (palette hue-shift, music vibe pick, setting flavor text)
-      so repeated runs of the same genre don't look identical
-- [ ] Orchestrator skips ingestion + VLM stages for these jobs (stage labels adjusted)
+- [x] New endpoint `POST /api/v1/demake/generate` accepting `{ "genre": "<template_id>" }`
+- [x] DNA synthesizer (`backend/pipeline/dna_synthesizer.py`): builds `game_dna.json`
+      from the genre template defaults + seeded random variation (shared hue-rotation
+      on the palette, generated title, setting flavor, genre-appropriate music vibe)
+      so repeated runs of the same genre don't look identical. Same seed = same world.
+- [x] Orchestrator skips ingestion + VLM stages for these jobs (detected via
+      `synth://` source_path — no DB migration needed); synthesized title replaces
+      the DB placeholder in the manifest
 
 **Per-genre slice targets (small but complete):**
-- [ ] Action RPG: multi-room dungeon with chests, enemy spawns, exit endpoint
-- [ ] Wave Shooter: bunker arena with cover + ammo caches (already close — verify)
-- [ ] Open World: city block with a few streets, NPCs, mission marker
-- [ ] Platformer: one complete level ending in a goal flag (already close — verify)
-- [ ] Turn-Based: overworld route with encounter zones + endpoint
+- [x] Wave Shooter: bunker arena with cover + ammo caches — verified end-to-end
+      (seed 42: full sprites, 30x20 tilemap, playable)
+- [x] Action RPG: multi-room dungeon with chests, enemy spawns, exit — verified
+      end-to-end (seed 7: "DRAGON BLADE", 36x26 BSP dungeon)
+- [x] Open World: city grid + NPCs + missions (pipeline identical — verified in 8D)
+- [x] Platformer: complete level ending in goal flag (pipeline identical — Sprint 7)
+- [x] Turn-Based: overworld route with encounter zones + gym endpoint (8E)
 
 **Frontend:**
-- [ ] `index.html`: two entry points — **Genre-Only (default)** dropdown + Generate
+- [x] `index.html`: two entry points — **Genre-Only (default)** dropdown + Generate
       button; Upload Trailer moved to secondary tab
-- [ ] WebSocket progress still streams for sprite/audio/tilemap stages
+- [x] WebSocket progress still streams (genre-only jobs jump straight to the
+      sprite stage — extraction/analysis stages stay dim)
+- [ ] **Deliverable:** user play-through of a genre-only generated world via the
+      index.html UI
 
 ### Sprint 9: Multi-Trailer Blending *(trailer mode only)* ⬜
 Feed two trailers → crossover demake ("What if Kingdom Hearts met CoD Zombies?").
