@@ -64,6 +64,16 @@
 const urlParams  = new URLSearchParams(window.location.search);
 const DEMAKE_ID  = urlParams.get("id");
 const API_BASE   = urlParams.get("api") || "http://localhost:8000";
+// ?template=<id> boots any genre scene directly from fallback data (smoke testing)
+const FORCE_TEMPLATE = urlParams.get("template");
+
+const TEMPLATE_IDS = [
+  "wave_shooter",
+  "side_scroll_platformer",
+  "top_down_action_rpg",
+  "open_world_sandbox",
+  "turn_based_rpg",
+];
 
 // Hardcoded fallback for testing game.html directly (no pipeline needed)
 const FALLBACK_MANIFEST = {
@@ -121,6 +131,7 @@ async function loadManifest() {
     // No ID in URL — use fallback for direct testing
     loadMsg.textContent = "No ID found — loading test manifest";
     MANIFEST = FALLBACK_MANIFEST;
+    applyTemplateOverride();
     startGame();
     return;
   }
@@ -145,6 +156,7 @@ async function loadManifest() {
     data.game_config.boss     = data.game_config.boss     || FALLBACK_MANIFEST.game_config.boss;
 
     MANIFEST = data;
+    applyTemplateOverride();
     loadMsg.textContent = `Loaded: ${MANIFEST.title}`;
     startGame();
 
@@ -152,8 +164,29 @@ async function loadManifest() {
     loadMsg.textContent = `Error: ${err.message} — using test manifest`;
     console.warn("Manifest fetch failed, using fallback:", err);
     MANIFEST = FALLBACK_MANIFEST;
+    applyTemplateOverride();
     setTimeout(startGame, 1200);
   }
+}
+
+// ?template=<id> overrides the manifest's template for per-genre smoke testing.
+// Also injects minimal genre-specific config so scenes don't crash on missing fields.
+function applyTemplateOverride() {
+  if (!FORCE_TEMPLATE) return;
+  if (!TEMPLATE_IDS.includes(FORCE_TEMPLATE)) {
+    console.warn(`[Smoke] Unknown template '${FORCE_TEMPLATE}' — ignoring`);
+    return;
+  }
+  MANIFEST.template = FORCE_TEMPLATE;
+  const gc = MANIFEST.game_config;
+  gc.combat = gc.combat || { max_hp: 120, max_mp: 60, attack_damage: 25,
+                             attack_range: 50, base_magic: 30 };
+  gc.enemy  = gc.enemy  || { base_hp: 50, base_speed: 45, damage: 15,
+                             hp_scale: 1.2, speed_scale: 1.05, base_attack: 15 };
+  gc.world  = gc.world  || { wanted_max: 5, npc_count: 8 };
+  gc.battle = gc.battle || { player_hp: 80, player_mp: 40, max_encounters: 5,
+                             base_attack: 20, base_magic: 30, base_heal: 25 };
+  console.log(`[Smoke] Template override → ${FORCE_TEMPLATE}`);
 }
 
 function startGame() {
@@ -335,6 +368,130 @@ class TilemapRenderer {
 
   get width()  { return this.worldW; }
   get height() { return this.worldH; }
+}
+
+// ============================================================
+// SHARED GAME SYSTEMS — Sprint 8A
+// Entity damage helpers, Inventory, ProjectileSystem.
+// One home for combat plumbing reused across template scenes.
+// ============================================================
+const SharedSystems = {
+
+  // Apply damage to any active sprite carrying .hp.
+  // Handles red flash + blood particles. Returns true if the hit was lethal.
+  applyDamage(scene, target, amount, opts = {}) {
+    if (!target || !target.active) return false;
+    target.hp = (target.hp ?? target.maxHp ?? 0) - amount;
+
+    target.setTint(opts.tint ?? 0xff0000);
+    scene.time.delayedCall(opts.flashMs ?? 100, () => {
+      if (target.active) target.clearTint();
+    });
+
+    if (opts.particles !== false && scene.textures.exists('blood')) {
+      for (let i = 0; i < 4; i++) {
+        const bp = scene.add.image(
+          target.x + Phaser.Math.Between(-4, 4),
+          target.y + Phaser.Math.Between(-4, 4),
+          'blood'
+        ).setDepth(6).setAlpha(0.9);
+        scene.time.delayedCall(300 + i * 50, () => bp.destroy());
+      }
+    }
+    return target.hp <= 0;
+  },
+
+  // Floating combat text ("+40 HP", "+ POTION") that drifts up and fades
+  floatText(scene, x, y, msg, color = '#ffffff') {
+    const t = scene.add.text(x - 10, y - 18, msg,
+      { fontSize: '9px', fontFamily: 'Courier New', color,
+        stroke: '#000000', strokeThickness: 2 }).setDepth(20);
+    scene.tweens.add({ targets: t, y: y - 36, alpha: 0, duration: 900,
+      onComplete: () => t.destroy() });
+  }
+};
+
+// Slot-based item store. Emits nothing itself — owning scene emits
+// 'inventoryChanged' so any HUD can subscribe.
+class Inventory {
+  constructor(maxSlots = 6) {
+    this.items     = {};   // itemId -> count
+    this.maxSlots  = maxSlots;
+    this.usedSlots = 0;
+  }
+
+  add(itemId, count = 1) {
+    for (let i = 0; i < count; i++) {
+      if (this.usedSlots >= this.maxSlots && !(itemId in this.items)) return false;
+      if (!(itemId in this.items)) { this.items[itemId] = 0; this.usedSlots++; }
+      this.items[itemId]++;
+    }
+    return true;
+  }
+
+  remove(itemId, count = 1) {
+    if (!this.has(itemId, count)) return false;
+    this.items[itemId] -= count;
+    if (this.items[itemId] <= 0) { delete this.items[itemId]; this.usedSlots--; }
+    return true;
+  }
+
+  has(itemId, count = 1) { return (this.items[itemId] || 0) >= count; }
+  count(itemId)          { return this.items[itemId] || 0; }
+}
+
+// Generic projectile pool usable by any scene/shooter.
+// Projectiles carry .damage, auto-expire via TTL and die on wall contact.
+class ProjectileSystem {
+  constructor(scene, texture = 'bullet', wallsGroup = null) {
+    this.scene   = scene;
+    this.texture = texture;
+    this.group   = scene.physics.add.group();
+    if (wallsGroup) this.collideWithWalls(wallsGroup);
+  }
+
+  collideWithWalls(wallsGroup) {
+    this.scene.physics.add.collider(this.group, wallsGroup, (proj) => proj.destroy());
+  }
+
+  // opts: { texture, damage, tint, ttlMs (0 = never expire), gravity }
+  fire(x, y, angleRad, speed, opts = {}) {
+    const tex  = opts.texture || this.texture;
+    const proj = this.group.create(x, y, tex);
+    proj.setDepth(8);
+    proj.setRotation(angleRad);
+    if (opts.tint) proj.setTint(opts.tint);
+    this.scene.physics.velocityFromAngle(
+      Phaser.Math.RadToDeg(angleRad), speed, proj.body.velocity
+    );
+    proj.body.setAllowGravity(opts.gravity === true);
+    proj.damage = opts.damage ?? 25;
+    if (opts.ttlMs !== 0) {
+      this.scene.time.delayedCall(opts.ttlMs ?? 3000, () => {
+        if (proj.active) proj.destroy();
+      });
+    }
+    return proj;
+  }
+}
+
+// Shared procedural textures (bolt, potion) appended to the standard set
+function initSharedTextures(scene) {
+  if (!scene.textures.exists('bolt')) {
+    const g = scene.make.graphics({ x: 0, y: 0, add: false });
+    g.fillStyle(0x8844ff); g.fillCircle(4, 4, 3);
+    g.fillStyle(0xddbbff); g.fillCircle(4, 4, 1.5);
+    g.generateTexture('bolt', 8, 8);
+    g.destroy();
+  }
+  if (!scene.textures.exists('potion')) {
+    const g = scene.make.graphics({ x: 0, y: 0, add: false });
+    g.fillStyle(0xcc2222); g.fillRect(2, 4, 6, 7);
+    g.fillStyle(0x885544); g.fillRect(3, 1, 4, 3);
+    g.fillStyle(0xff8888); g.fillRect(3, 6, 2, 3);
+    g.generateTexture('potion', 10, 12);
+    g.destroy();
+  }
 }
 
 // ============================================================
@@ -535,6 +692,9 @@ function generateTextures(scene, useRealSprites = {}) {
     wallGfx.generateTexture('tile_wall', TILE, TILE);
     wallGfx.destroy();
   }
+
+  // Sprint 8A shared textures
+  initSharedTextures(scene);
 }
 
 // ============================================================
@@ -660,7 +820,7 @@ class GameScene extends Phaser.Scene {
     this.worldH      = worldHeight;
 
     // ── Groups ─────────────────────────────────────────────
-    this.bullets  = this.physics.add.group();
+    this.projectiles = new ProjectileSystem(this, 'bullet', walls);  // Sprint 8A
     this.enemies  = this.physics.add.group();
     this.particles = this.add.group();
 
@@ -705,7 +865,7 @@ class GameScene extends Phaser.Scene {
     });
 
     // ── Collisions ─────────────────────────────────────────
-    this.physics.add.overlap(this.bullets, this.enemies, this.hitEnemy, null, this);
+    this.physics.add.overlap(this.projectiles.group, this.enemies, this.hitEnemy, null, this);
     this.physics.add.overlap(this.player,  this.enemies, this.enemyTouchPlayer, null, this);
 
     // ── HUD Scene ──────────────────────────────────────────
@@ -804,15 +964,7 @@ class GameScene extends Phaser.Scene {
     const py = this.player.y;
     const angle = Phaser.Math.Angle.Between(px, py, targetX, targetY);
 
-    const bullet = this.bullets.create(px, py, 'bullet');
-    bullet.setDepth(8);
-    bullet.setRotation(angle);
-    this.physics.velocityFromAngle(
-      Phaser.Math.RadToDeg(angle),
-      cfg.physics.bullet_speed,
-      bullet.body.velocity
-    );
-    bullet.body.setAllowGravity(false);
+    this.projectiles.fire(px, py, angle, cfg.physics.bullet_speed, { damage: 25 });
 
     // Muzzle flash
     const flash = this.add.image(
@@ -849,23 +1001,7 @@ class GameScene extends Phaser.Scene {
 
   hitEnemy(bullet, enemy) {
     bullet.destroy();
-    enemy.hp -= 25;
-
-    // Blood particle
-    for (let i = 0; i < 4; i++) {
-      const bp = this.add.image(
-        enemy.x + Phaser.Math.Between(-4, 4),
-        enemy.y + Phaser.Math.Between(-4, 4),
-        'blood'
-      ).setDepth(6).setAlpha(0.9);
-      this.time.delayedCall(300 + i * 50, () => bp.destroy());
-    }
-
-    // Flash red
-    enemy.setTint(0xff0000);
-    this.time.delayedCall(80, () => enemy.clearTint());
-
-    if (enemy.hp <= 0) {
+    if (SharedSystems.applyDamage(this, enemy, 25)) {
       this.killEnemy(enemy);
     }
   }
@@ -959,12 +1095,7 @@ class GameScene extends Phaser.Scene {
       else enemy.setFlipX(false);
     });
 
-    // ── Destroy bullets that hit walls ──
-    this.bullets.children.each(b => {
-      if (b.x < TILE || b.x > this.worldW - TILE || b.y < TILE || b.y > this.worldH - TILE) {
-        b.destroy();
-      }
-    });
+    // Projectile TTL + wall colliders handle cleanup (Sprint 8A)
   }
 }
 
@@ -1411,6 +1542,7 @@ class TopDownRPGScene extends Phaser.Scene {
     this.gameOver = false;
     this._attackCooldown = 0;
     this._dodgeCooldown  = 0;
+    this.inventory = new Inventory(6);  // Sprint 8A
 
     // ── World — TilemapRenderer ────────────────────────────
     const tileRenderer = new TilemapRenderer(this);
@@ -1419,6 +1551,19 @@ class TopDownRPGScene extends Phaser.Scene {
     this.walls       = walls;
     this.worldW      = worldWidth;
     this.worldH      = worldHeight;
+
+    // ── Projectiles (magic bolts) — Sprint 8A ───────────────
+    this.projectiles = new ProjectileSystem(this, 'bolt', walls);
+
+    // ── Chests from WFC item spawns — Sprint 8A ─────────────
+    this.chestPositions = itemSpawns
+      .filter(sp => sp.tileType === 'chest')
+      .map(sp => ({ x: sp.x, y: sp.y, opened: false }));
+    if (this.chestPositions.length === 0 && itemSpawns.length > 0) {
+      // Fallback: treat first item spawn as a chest
+      const sp = itemSpawns[0];
+      this.chestPositions.push({ x: sp.x, y: sp.y, opened: false });
+    }
 
     // ── Player ───────────────────────────────────────────────
     this.player = this.physics.add.sprite(playerSpawn.x, playerSpawn.y, 'player', 0);
@@ -1446,6 +1591,7 @@ class TopDownRPGScene extends Phaser.Scene {
     this.physics.add.collider(this.player,  this.walls);
     this.physics.add.collider(this.enemies, this.walls);
     this.physics.add.overlap(this.player, this.enemies, this._touchEnemy, null, this);
+    this.physics.add.overlap(this.projectiles.group, this.enemies, this._magicHit, null, this);
     // In TopDownRPGScene.create(), after collisions, add a camera follow + zoom:
     this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
     this.cameras.main.setZoom(1.5);
@@ -1458,6 +1604,7 @@ class TopDownRPGScene extends Phaser.Scene {
       attack:Phaser.Input.Keyboard.KeyCodes.SPACE,
       dodge: Phaser.Input.Keyboard.KeyCodes.SHIFT,
       magic: Phaser.Input.Keyboard.KeyCodes.E,
+      potion:Phaser.Input.Keyboard.KeyCodes.Q,
     });
 
     this.scene.launch('TopDownHUD', { gameScene: this });
@@ -1474,6 +1621,35 @@ class TopDownRPGScene extends Phaser.Scene {
     player.setTint(0xff0000);
     this.time.delayedCall(150, () => player.clearTint());
     if (this.hp <= 0) { this.gameOver = true; this.physics.pause(); this.events.emit('gameOver', this.score); }
+  }
+
+  // ── Chest interaction — SPACE near an unopened chest (Sprint 8A) ──
+  _tryOpenChest() {
+    let nearest = null, nd = Infinity;
+    this.chestPositions.forEach(c => {
+      if (c.opened) return;
+      const d = Phaser.Math.Distance.Between(this.player.x, this.player.y, c.x, c.y);
+      if (d < nd) { nd = d; nearest = c; }
+    });
+    if (!nearest || nd > 30) return false;
+
+    nearest.opened = true;
+    this.inventory.add('potion', 1);
+    this.events.emit('inventoryChanged', this.inventory);
+    SharedSystems.floatText(this, nearest.x, nearest.y, '+ POTION', '#ff8888');
+    this.score += 50;
+    this.events.emit('scoreChanged', this.score);
+    return true;
+  }
+
+  // ── Magic bolt hit — Sprint 8A ──
+  _magicHit(proj, enemy) {
+    proj.destroy();
+    if (SharedSystems.applyDamage(this, enemy, proj.damage || 30, { tint: 0x8800ff })) {
+      this.score += 150;
+      this.events.emit('scoreChanged', this.score);
+      enemy.destroy();
+    }
   }
 
   update(time) {
@@ -1495,40 +1671,58 @@ class TopDownRPGScene extends Phaser.Scene {
       if (this.anims.exists('player_idle')) this.player.play('player_idle', true);
     }
 
-    // Attack — damages all nearby enemies
+    // Attack — melee AoE; opens a nearby chest instead if one is in range (Sprint 8A)
     if (Phaser.Input.Keyboard.JustDown(k.attack) && time > this._attackCooldown) {
       this._attackCooldown = time + 400;
-      const atk = MANIFEST.game_config.combat?.attack_damage || 25;
-      const range = MANIFEST.game_config.combat?.attack_range || 50;
-      if (this.anims.exists('player_shoot')) this.player.play('player_shoot', true);
-      this.cameras.main.shake(60, 0.005);
-      this.enemies.children.each(e => {
-        if (!e.active) return;
-        const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, e.x, e.y);
-        if (dist < range) {
-          e.hp -= atk;
-          e.setTint(0xff0000);
-          this.time.delayedCall(100, () => { if (e.active) e.clearTint(); });
-          if (e.hp <= 0) { this.score += 100; this.events.emit('scoreChanged', this.score); e.destroy(); }
-        }
-      });
+      if (this._tryOpenChest()) {
+        // Chest opened — skip the swing
+      } else {
+        const atk = MANIFEST.game_config.combat?.attack_damage || 25;
+        const range = MANIFEST.game_config.combat?.attack_range || 50;
+        if (this.anims.exists('player_shoot')) this.player.play('player_shoot', true);
+        this.cameras.main.shake(60, 0.005);
+        this.enemies.children.each(e => {
+          if (!e.active) return;
+          const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, e.x, e.y);
+          if (dist < range) {
+            if (SharedSystems.applyDamage(this, e, atk)) {
+              this.score += 100;
+              this.events.emit('scoreChanged', this.score);
+              e.destroy();
+            }
+          }
+        });
+      }
     }
 
-    // Magic — costs MP, longer range
+    // Magic — costs MP, fires a bolt at the nearest enemy (Sprint 8A)
     if (Phaser.Input.Keyboard.JustDown(k.magic) && this.mp >= 10) {
       this.mp -= 10;
       this.events.emit('mpChanged', this.mp);
       const mgk = MANIFEST.game_config.combat?.base_magic || 30;
+
+      let target = null, best = Infinity;
       this.enemies.children.each(e => {
         if (!e.active) return;
-        const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, e.x, e.y);
-        if (dist < 100) {
-          e.hp -= mgk;
-          e.setTint(0x8800ff);
-          this.time.delayedCall(150, () => { if (e.active) e.clearTint(); });
-          if (e.hp <= 0) { this.score += 150; this.events.emit('scoreChanged', this.score); e.destroy(); }
-        }
+        const d = Phaser.Math.Distance.Between(this.player.x, this.player.y, e.x, e.y);
+        if (d < best) { best = d; target = e; }
       });
+      const ang = target
+        ? Phaser.Math.Angle.Between(this.player.x, this.player.y, target.x, target.y)
+        : (this.player.flipX ? Math.PI : 0);
+      this.projectiles.fire(this.player.x, this.player.y, ang, 260,
+        { texture: 'bolt', damage: mgk, tint: 0xaa66ff, ttlMs: 2000 });
+    }
+
+    // Potion — Q consumes one from inventory (Sprint 8A)
+    if (Phaser.Input.Keyboard.JustDown(k.potion) &&
+        this.inventory.has('potion') && this.hp < this.maxHp) {
+      this.inventory.remove('potion');
+      const heal = Math.round(this.maxHp * 0.4);
+      this.hp = Math.min(this.maxHp, this.hp + heal);
+      this.events.emit('hpChanged', this.hp);
+      this.events.emit('inventoryChanged', this.inventory);
+      SharedSystems.floatText(this, this.player.x, this.player.y, `+${heal} HP`, '#44ff44');
     }
 
     // Enemy AI — chase player
@@ -1562,12 +1756,17 @@ class TopDownHUD extends Phaser.Scene {
     this.mpBar = this.add.rectangle(136, 11, 60, 8, 0x8800ff).setDepth(22).setOrigin(0,0.5);
     this.scoreText = this.add.text(W-100, 4, 'SCORE 0', { fontSize: '8px', fontFamily: 'Courier New', color: hc }).setDepth(21);
     this.add.text(W/2-60, 4, 'SPACE-ATK  E-MAGIC', { fontSize: '7px', fontFamily: 'Courier New', color: '#444' }).setDepth(21);
+    this.potText = this.add.text(W-100, 14, '', { fontSize: '8px', fontFamily: 'Courier New', color: '#ff8888' }).setDepth(21);
 
     const gs = this.gs;
     const maxHp = gs.maxHp, maxMp = gs.maxMp;
     gs.events.on('hpChanged', v => { this.hpBar.width = 80 * Math.max(0,v)/maxHp; });
     gs.events.on('mpChanged', v => { this.mpBar.width = 60 * Math.max(0,v)/maxMp; });
     gs.events.on('scoreChanged', v => this.scoreText.setText(`SCORE ${v}`));
+    gs.events.on('inventoryChanged', inv => {
+      const n = inv.count('potion');
+      this.potText.setText(n > 0 ? `POTION x${n} (Q)` : '');
+    });
     gs.events.on('roomClear', score => this._endScreen('ROOM CLEAR!', '#44ff44', score));
     gs.events.on('gameOver', score => this._endScreen('YOU DIED', '#ff0000', score));
   }
@@ -2244,7 +2443,7 @@ function bootPhaser() {
   const CONTROLS = {
     wave_shooter:         'WASD — MOVE  |  MOUSE — AIM & SHOOT  |  R — RELOAD',
     side_scroll_platformer:'A/D — MOVE  |  W / SPACE — JUMP',
-    top_down_action_rpg:  'WASD — MOVE  |  SPACE — ATTACK  |  E — MAGIC',
+    top_down_action_rpg:  'WASD — MOVE  |  SPACE — ATTACK/CHEST  |  E — MAGIC  |  Q — POTION',
     open_world_sandbox:   'WASD — MOVE  |  SPACE — ATTACK  |  ★ FIND MISSIONS',
     turn_based_rpg:       'WASD — MOVE  |  SPACE — INTERACT  |  ← → — BATTLE MENU',
   };

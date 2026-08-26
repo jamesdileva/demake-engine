@@ -1,6 +1,6 @@
 # 🎮 DEMAKE ENGINE — Grand Architecture Document
 ### *Turn any modern game trailer into a playable 8-bit browser game*
-> Version 1.0 | Status: In Design | Target: GitHub Open Source
+> Version 1.1 | Status: Sprint 8A In Progress | Target: GitHub Open Source
 
 ---
 
@@ -25,7 +25,15 @@
 ## 1. Vision & Scope
 
 ### What This Is
-You feed a modern game trailer (MP4) into the system. A multimodal AI pipeline analyzes it, extracts the game's DNA — genre, color palette, character shapes, mechanics, and vibe — and automatically generates a **playable 8-bit browser demake** complete with procedurally generated chiptune music.
+You feed the system a **genre pick** (or optionally a modern game trailer MP4). A multimodal AI pipeline extracts the game's DNA — genre, color palette, character shapes, mechanics, and vibe — and automatically generates a **playable 8-bit browser demake** complete with procedurally generated chiptune music.
+
+### Two Input Modes (v1.1)
+| Mode | Input | Pipeline Path | Status |
+|---|---|---|---|
+| **Mode -1: Genre-Only** *(default)* | Pick a genre from a dropdown | Template defaults + seeded random DNA → sprites → audio → WFC tilemap → playable world slice. No upload, no VLM call, no video. | Sprint 8F |
+| **Mode 2: Trailer Upload** *(secondary)* | Upload an MP4 trailer | Full VLM pipeline as originally designed. Treated as a "vibe seed" — it was never going to recreate the exact source game; it produces a demake *inspired by* the trailer's DNA. | Working since Sprint 4 |
+
+Genre-Only is the headline flow: it is instant, free, and showcases the procedural core of the engine. Trailer mode stays available for when you want AI-derived art direction from real footage.
 
 ### Target Games (Inspirations)
 These three genres define the scope of v1. They are intentionally very different, which forces the system to be genre-flexible by design.
@@ -47,25 +55,29 @@ These three genres define the scope of v1. They are intentionally very different
 ## 2. System Overview
 
 ```
-[ User uploads trailer MP4 ]
-          │
-          ▼
+[ User picks a genre ]  ── or ──  [ User uploads trailer MP4 ]
+          │ Mode -1: synthesized DNA           │
+          │ (template defaults + seed)         │
+          ▼                                    ▼
 ┌─────────────────────┐
 │   FastAPI Backend   │  ← Handles upload, queuing, status polling
 │   (Orchestrator)    │
 └────────┬────────────┘
-         │ Enqueues job
-         ▼
+          │ Enqueues job
+          ▼
 ┌─────────────────────────────────────────────────────┐
 │                  ML PIPELINE                         │
 │                                                      │
 │  1. ffmpeg         → Extract keyframes + audio      │
-│  2. VLM (Cloud)    → Analyze frames → Game DNA JSON │
+│     (trailer mode only — skipped in genre-only)      │
+│  2. VLM (Cloud)    → Analyze frames → Game DNA JSON  │
+│     (trailer mode only — skipped in genre-only)      │
 │  3. Genre Matcher  → Select template                │
 │  4. Validator      → Pydantic schema check + retry  │
 │  5. Sprite Gen     → Local SD → pixel art sheets    │
 │  6. Audio Gen      → MIDI algorithmic generator     │
-│  7. Logic Gen      → Local LLM → Game config JSON   │
+│  7. Logic Gen      → Game config JSON               │
+│  8. WFC Tilemap    → Procedural level layout        │
 └────────┬────────────────────────────────────────────┘
          │ Writes assets + manifest to disk + DB
          ▼
@@ -727,7 +739,7 @@ This is the central data structure that connects the ML pipeline to the game eng
 
 ## 12. Sprint Plan
 
-### Sprint 0: Genre Template Library *(~3 days)*
+### Sprint 0: Genre Template Library *(~3 days)* — ✅ COMPLETE
 **Goal:** A manually-authored, playable browser game for each template, driven by hardcoded JSON.
 
 - [ ] Write 4 template JSON config files
@@ -736,7 +748,7 @@ This is the central data structure that connects the ML pipeline to the game eng
 - [ ] Build HUD scene with all HUD element types
 - [ ] **Deliverable:** Visit `game.html?manifest=test_wave_shooter.json` and play a working (if ugly) game
 
-### Sprint 1: Backend Scaffolding *(~4 days)*
+### Sprint 1: Backend Scaffolding *(~4 days)* — ✅ COMPLETE
 **Goal:** API endpoints live, SQLite wired, upload works, queue runs.
 
 - [ ] FastAPI app setup with SQLAlchemy + WAL mode SQLite
@@ -746,7 +758,7 @@ This is the central data structure that connects the ML pipeline to the game eng
 - [ ] Pipeline stub (each stage logs "stage X complete", sleeps 2s)
 - [ ] **Deliverable:** Upload a video, poll status, see it move through fake stages, fetch a hardcoded manifest
 
-### Sprint 2: Ingestion & VLM Analysis *(~5 days)*
+### Sprint 2: Ingestion & VLM Analysis *(~5 days)* — ✅ COMPLETE
 **Goal:** Upload a real trailer, get real `game_dna.json` back.
 
 - [ ] ffmpeg keyframe + audio extraction
@@ -756,7 +768,7 @@ This is the central data structure that connects the ML pipeline to the game eng
 - [ ] Genre matcher + fallback logic
 - [ ] **Deliverable:** Upload a GTA or CoD trailer → receive valid `game_dna.json` in `/outputs/{id}/`
 
-### Sprint 3: Asset & Audio Generation *(~7 days)*
+### Sprint 3: Asset & Audio Generation *(~7 days)* — ✅ COMPLETE
 **Goal:** Automated sprites + MIDI from game DNA.
 
 - [ ] SD 1.5 + LCM LoRA setup (pixel art)
@@ -767,7 +779,7 @@ This is the central data structure that connects the ML pipeline to the game eng
 - [ ] Vibe → MIDI parameter mapping
 - [ ] **Deliverable:** `game_dna.json` in → `/outputs/{id}/sprites/` + `/outputs/{id}/audio/` fully populated
 
-### Sprint 4: Integration & Upload UI *(~5 days)*
+### Sprint 4: Integration & Upload UI *(~5 days)* — ✅ COMPLETE
 **Goal:** Full end-to-end: upload → wait → play.
 
 - [ ] Wire all pipeline steps into `orchestrator.py`
@@ -786,21 +798,118 @@ This is the central data structure that connects the ML pipeline to the game eng
 - [ ] `config.yaml` documentation
 - [ ] MIT License
 
-Sprint 5:   Polish & Wiring Review
-Sprint 5.5: Prompt & Cache Tuning (CLIP truncation fix, smarter dedup)
-Sprint 6:   Fine-tuned Sprites
-Sprint 6.5: WebSocket Hardening
+Sprint 5:   Polish & Wiring Review ✅
+Sprint 5.5: Prompt & Cache Tuning (CLIP truncation fix, smarter dedup) ✅
+Sprint 6:   Fine-tuned Sprites ✅
+Sprint 6.5: WebSocket Hardening ✅
 
-Sprint 7:   Tilemap Generation
-Sprint 8A  — Shared game systems (entities, inventory, projectiles)
-Sprint 8B  — Wave Shooter full loop (CoD Zombies mansion)
-Sprint 8C  — Top Down ARPG full loop (KH Coliseum + world)  
-Sprint 8D  — Open World full loop (GTA city + wanted system)
-Sprint 8E  — Turn Based full loop (Pokemon encounters + gym)
-Sprint 9:   Multi-trailer Blending
-Sprint 9a   — Unity/Godot export
-Sprint 10  — IGDB title lookup (your earlier idea — replaces VLM for known games)
-Sprint 11  — Save & Share (hosted demakes, permanent URLs)
+Sprint 7:   Tilemap Generation ✅ — WFC generator (`backend/pipeline/tilemap_gen.py`) +
+            `TilemapRenderer` in `game.html` verified generating & rendering playable
+            maps for all 5 genre templates.
+
+---
+
+## Sprint 8 Series — Full Gameplay Loops
+
+Status after the Sprint 7 tilemap verification pass (each template boots and plays on a
+WFC-generated map). The "full loop" depth work is partially done per genre:
+
+| Sprint | Scope | Status |
+|---|---|---|
+| 8A | Shared game systems (entities, inventory, projectiles) | 🔶 **IN PROGRESS** |
+| 8B | Wave Shooter full loop | ✅ Waves, boss every N, ammo/reload, score, death |
+| 8C | Top Down ARPG full loop | 🔶 Melee + magic + room clear done; chest loot & consumables missing |
+| 8D | Open World full loop | 🔶 Wanted stars + missions exist but minimal (no police escalation, no busted/arrest state) |
+| 8E | Turn Based full loop | 🔶 Overworld → random encounters → battle loop done; no gym/boss endpoint as win condition |
+
+### Sprint 8A: Shared Game Systems — 🚧 CURRENT SPRINT
+
+**Plan & Scope:** Extract the combat plumbing duplicated across templates into reusable,
+shared systems inside `game.html`, then wire them into the scenes that need them.
+
+- [x] `SharedSystems.applyDamage()` — common damage helper: HP decrement, red flash,
+      blood particles, death callback (deduplicates 4 near-identical code paths)
+- [x] `Inventory` class — slot-based item store (add/remove/has/count), scene-event driven
+      (`inventoryChanged`) so any HUD can subscribe
+- [x] `ProjectileSystem` class — generic projectile pool: `fire(x, y, angle, speed, opts)`,
+      TTL, auto-destroy on wall collision, damage payload, works for player AND enemy shots
+- [x] Shared textures (`bolt`, `potion`) generated procedurally alongside existing ones
+- [x] Wire into WaveShooter: replace inline bullet group with `ProjectileSystem`
+      (+ bullets now collide with walls)
+- [x] Wire into TopDownRPG: magic fires a projectile instead of instant AoE;
+      chests from WFC `item` spawns openable with SPACE → potion loot into Inventory;
+      Q consumes potion to heal (uses `applyDamage` inverse path)
+- [x] ARPG HUD shows potion count via `inventoryChanged`
+- [x] `?template=` URL param on `game.html` — boots any genre scene directly from
+      fallback manifest for instant per-genre smoke testing (no backend/upload needed;
+      unlocked by the Genre-Only direction)
+- [ ] **Deliverable:** ARPG run: find chest → get potion → drink it → clear room with
+      projectile magic. Wave shooter unchanged behaviorally but on shared systems.
+      *(Code done + `node --check` clean — needs one manual browser play-through)*
+
+### Sprint 8B–8E Completion Items
+
+- [ ] 8D: wanted-star escalation (police NPC spawn rate/damage scales per star),
+      busted state when surrounded at 3+ stars (arrest instead of death)
+- [ ] 8E: gym/boss arena tile type in WFC tileset → final boss battle as win condition
+      (replaces "N encounters" counter)
+- [ ] 8C: boss enemy in final dungeon room (leverages shared systems from 8A)
+
+### Sprint 8F: Genre-Only Mode ("Mode -1") — NEW
+
+**Goal:** Generate a small, fully-fleshed playable world slice from just a genre pick.
+No trailer upload, no VLM call, no video processing — instant demakes.
+
+**Backend:**
+- [ ] New endpoint `POST /api/v1/demake/generate` accepting `{ "genre": "<template_id>" }`
+- [ ] DNA synthesizer: builds `game_dna.json` from the genre template defaults +
+      seeded random variation (palette hue-shift, music vibe pick, setting flavor text)
+      so repeated runs of the same genre don't look identical
+- [ ] Orchestrator skips ingestion + VLM stages for these jobs (stage labels adjusted)
+
+**Per-genre slice targets (small but complete):**
+- [ ] Action RPG: multi-room dungeon with chests, enemy spawns, exit endpoint
+- [ ] Wave Shooter: bunker arena with cover + ammo caches (already close — verify)
+- [ ] Open World: city block with a few streets, NPCs, mission marker
+- [ ] Platformer: one complete level ending in a goal flag (already close — verify)
+- [ ] Turn-Based: overworld route with encounter zones + endpoint
+
+**Frontend:**
+- [ ] `index.html`: two entry points — **Genre-Only (default)** dropdown + Generate
+      button; Upload Trailer moved to secondary tab
+- [ ] WebSocket progress still streams for sprite/audio/tilemap stages
+
+### Sprint 9: Multi-Trailer Blending *(trailer mode only)* ⬜
+Feed two trailers → crossover demake ("What if Kingdom Hearts met CoD Zombies?").
+Scoped to trailer mode; genre-only mode is unaffected.
+
+### Sprint 9a: Godot Export ⬜ *(replaces the old "Unity/Godot" item — Godot chosen)*
+
+**Decision:** Unity is out. **Godot 4** is the export target (already installed locally).
+
+**Deliverable:** a manifest → Godot project generator. Phaser remains the live browser
+player; Godot is an additional downloadable artifact per demake.
+
+- [ ] New backend module `backend/pipeline/godot_export.py`: given a manifest, emit a
+      complete Godot 4 project folder:
+      - `project.godot` (viewport 480×320, pixel-art texture settings, input map)
+      - `main.gd` + one GDScript scene script per genre template, mirroring the
+        Phaser template classes (WaveShooter.tscn/gd, TopDownRPG, OpenWorld,
+        Platformer, TurnBased)
+      - Sprites copied into `assets/` with `.import` hints; tilemap grid →
+        Godot `TileMapLayer` node data or generated `TileSet` resource
+      - Audio: MIDI → converted OGG/WAV at export time (Godot has no native MIDI playback)
+      - Spawn points from the WFC tilemap map to node placement in each scene
+- [ ] API: `GET /api/v1/demake/{id}/godot` → zipped project download
+- [ ] Verify round-trip: open generated project in Godot editor, press Play,
+      gameplay matches the browser version for at least wave_shooter + top_down_action_rpg
+
+### Sprint 10: IGDB Title Lookup ⬜
+Known game titles skip VLM analysis entirely — look up cover art/screenshots/metadata
+from IGDB and derive DNA deterministically. Works for both modes.
+
+### Sprint 11: Save & Share ⬜
+Hosted demakes with permanent URLs.
 
 ---
 
@@ -829,13 +938,18 @@ Sprint 11  — Save & Share (hosted demakes, permanent URLs)
 
 These are intentionally out of scope for v1 but worth designing toward:
 
-- **v2: Tilemap generation** — Use LLM to output a full tile grid for procedural level layouts instead of empty arenas
+- ~~v2: Tilemap generation~~ — **DONE in v1 (Sprint 7)**: WFC produces full tile grids with spawn points
 - **v2: Fine-tuned NES sprite model** — Fine-tune SD on actual NES game spritesheets for authentic output (a real ML contribution)
-- **v3: Multi-trailer blending** — Feed two trailers to get a crossover demake ("What if Kingdom Hearts met CoD Zombies?")
-- **v3: Save & share** — Hosted version where generated demakes get permanent URLs
+- **v2: Genre-Only world options** — biome/size/palette pickers on top of Mode -1
+- ~~v3: Multi-trailer blending~~ — promoted to Sprint 9 (trailer mode only)
+- ~~v3: Save & share~~ — promoted to Sprint 11
+- **v3: Godot web exports** — hosted Godot-exported demakes alongside Phaser builds (builds on Sprint 9a)
 - **v4: Mobile export** — Package generated manifest as a React Native game
 
 ---
 
 *Built for fun. Inspired by Kingdom Hearts, CoD Zombies, and GTA.*  
 *Open source under MIT License.*
+
+> **Changelog:** v1.1 — Two-mode entry (Genre-Only default / Trailer secondary), Sprint 8F added,
+> Sprint 9a locked to Godot 4 export, sprint statuses reconciled with codebase state.
