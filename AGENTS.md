@@ -30,10 +30,12 @@ Never commit unrelated files. Runtime artifacts (`demake.db`, `__pycache__/`,
 - Python changes: run the backend once (`venv/Scripts/python -m uvicorn main:app --app-dir backend`)
   and hit the affected endpoint before claiming done.
 - Frontend changes: syntax-check the JS inside `frontend/game.html`
-  (extract the `<script>` body and run `node --check`), and smoke-test at least one
-  template scene via the fallback manifest (`game.html` with no `?id=` param boots
-  wave_shooter; add `?template=` style testing only if supported).
-- No test framework is configured; manual verification + syntax checks are the bar.
+  (extract the `<script>` body and run `node --check`), then run the headless
+  smoke test (`tools/smoke.js` — see usage comment at top of file) for every
+  affected template: `node smoke.js <template_id>` must report the correct
+  active scene and `NO CONSOLE ERRORS`. Screenshots land in
+  `%TEMP%\opencode\smoke\`.
+- No test framework is configured; smoke harness + manual verification are the bar.
 
 ## Environment notes
 

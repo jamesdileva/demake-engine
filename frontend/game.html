@@ -122,6 +122,12 @@ function normalizePalette(palette) {
   };
 }
 
+// Accepts int or '#hex' string — always returns an int
+function hexColor(v, fallbackHex) {
+  if (typeof v === 'number') return v;
+  return parseInt((v || fallbackHex).replace('#', ''), 16);
+}
+
 let MANIFEST = null;
 
 async function loadManifest() {
@@ -191,13 +197,12 @@ function applyTemplateOverride() {
 
 function startGame() {
   document.getElementById("loading-overlay").style.display = "none";
-  document.getElementById("header").textContent =
-    `◆ ${MANIFEST.title || "DEMAKE"} ◆`;
+  const title = MANIFEST.title || "DEMAKE";
+  document.getElementById("header").textContent = FORCE_TEMPLATE
+    ? `◆ SMOKE TEST — ${FORCE_TEMPLATE} ◆`
+    : `◆ ${title} ◆`;
   bootPhaser();
 }
-
-// Start loading immediately
-loadManifest();
 
 // Global constants used by Phaser scenes and generateTextures
 // Declared as var so they're accessible across all functions
@@ -347,7 +352,7 @@ class TilemapRenderer {
       [8,   H/2,  16, H],
       [W-8, H/2,  16, H],
     ].forEach(([x,y,w,h]) => {
-      const wc = parseInt((p.secondary||'#2a2a3a').replace('#',''),16);
+      const wc = hexColor(p.secondary, '#2a2a3a');
       const wall = this.scene.add.rectangle(x, y, w, h, wc).setDepth(2);
       this.scene.physics.add.existing(wall, true);
       this.walls.add(wall);
@@ -1310,7 +1315,7 @@ class PlatformerScene extends Phaser.Scene {
     // ── Enemies ───────────────────────────────────────────────
     this.enemies = this.physics.add.group();
     const spd = cfg.enemy?.base_speed || 40;
-    const enemyColor = parseInt((p.accent || '#ff2200').replace('#',''), 16);
+    const enemyColor = hexColor(p.accent, '#ff2200');
 
     enemySpawns.forEach(sp => {
       const gfx = this.make.graphics({ x: 0, y: 0, add: false });
@@ -1346,7 +1351,7 @@ class PlatformerScene extends Phaser.Scene {
           fontSize: '8px', fontFamily: 'Courier New', color: '#ffff00'
         }).setDepth(5);
       } else {
-        const coinColor = parseInt((p.highlight || '#ffcc00').replace('#',''), 16);
+        const coinColor = hexColor(p.highlight, '#ffcc00');
         const coin = this.add.circle(sp.x, sp.y, 5, coinColor).setDepth(4);
         coin.collected = false;
         this.coins.push(coin);
@@ -2476,7 +2481,8 @@ function bootPhaser() {
     scene: scenes
   };
 
-  new Phaser.Game(config);
+  const game = new Phaser.Game(config);
+  window._game = game;  // exposed for headless smoke tests
 }
 
 // ============================================================
@@ -2562,6 +2568,12 @@ function initAudio() {
 document.addEventListener('click', () => {
   if (!window._audioStarted) initAudio();
 }, { once: true });
+
+// ============================================================
+// BOOT — deferred to script end so all scene classes are
+// evaluated first (the fallback path boots Phaser synchronously)
+// ============================================================
+loadManifest();
 </script>
 </body>
 </html>

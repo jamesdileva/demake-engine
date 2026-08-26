@@ -843,9 +843,16 @@ shared systems inside `game.html`, then wire them into the scenes that need them
 - [x] `?template=` URL param on `game.html` — boots any genre scene directly from
       fallback manifest for instant per-genre smoke testing (no backend/upload needed;
       unlocked by the Genre-Only direction)
+- [x] Headless smoke harness (`tools/smoke.js`, puppeteer-core + installed Edge) —
+      all 5 templates verified: correct scene active, NO CONSOLE ERRORS.
+      Fixed two latent boot bugs found by the harness: (1) fallback path booted
+      Phaser before scene classes were evaluated (TDZ crash — `loadManifest()` now
+      deferred to script end), (2) scenes crashed on integer palette values
+      (`hexColor()` helper added)
 - [ ] **Deliverable:** ARPG run: find chest → get potion → drink it → clear room with
       projectile magic. Wave shooter unchanged behaviorally but on shared systems.
-      *(Code done + `node --check` clean — needs one manual browser play-through)*
+      *(Boot verified headless for all templates — one manual browser play-through
+      still pending)*
 
 ### Sprint 8B–8E Completion Items
 
