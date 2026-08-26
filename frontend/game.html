@@ -1569,6 +1569,19 @@ class TopDownRPGScene extends Phaser.Scene {
       const sp = itemSpawns[0];
       this.chestPositions.push({ x: sp.x, y: sp.y, opened: false });
     }
+    if (this.chestPositions.length === 0) {
+      // No tilemap (smoke-test fallback) — guarantee one chest on open floor
+      const spot = this._findOpenSpot(worldWidth, worldHeight, playerSpawn);
+      this.chestPositions.push({ x: spot.x, y: spot.y, opened: false });
+    }
+
+    // Chest visuals — brown box + gold star marker
+    this.chestPositions.forEach(c => {
+      c.rect = this.add.rectangle(c.x, c.y, 14, 10, 0x8b4513).setDepth(4);
+      c.rect.setStrokeStyle(1, 0xffd700);
+      this.add.text(c.x - 5, c.y - 15, '★',
+        { fontSize: '10px', color: '#ffd700' }).setDepth(4);
+    });
 
     // ── Player ───────────────────────────────────────────────
     this.player = this.physics.add.sprite(playerSpawn.x, playerSpawn.y, 'player', 0);
@@ -1628,6 +1641,23 @@ class TopDownRPGScene extends Phaser.Scene {
     if (this.hp <= 0) { this.gameOver = true; this.physics.pause(); this.events.emit('gameOver', this.score); }
   }
 
+  // Open-floor point 50-110px from player spawn (stays on camera at 1.5x zoom),
+  // clear of walls
+  _findOpenSpot(worldW, worldH, playerSpawn) {
+    for (let i = 0; i < 40; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const dist = Phaser.Math.Between(50, 110);
+      const x = Phaser.Math.Clamp(playerSpawn.x + Math.cos(ang) * dist, 30, worldW - 30);
+      const y = Phaser.Math.Clamp(playerSpawn.y + Math.sin(ang) * dist, 30, worldH - 30);
+      let ok = true;
+      this.walls.children.each(wall => {
+        if (Phaser.Math.Distance.Between(x, y, wall.x, wall.y) < 24) ok = false;
+      });
+      if (ok) return { x, y };
+    }
+    return { x: worldW / 2, y: worldH / 2 };
+  }
+
   // ── Chest interaction — SPACE near an unopened chest (Sprint 8A) ──
   _tryOpenChest() {
     let nearest = null, nd = Infinity;
@@ -1639,6 +1669,7 @@ class TopDownRPGScene extends Phaser.Scene {
     if (!nearest || nd > 30) return false;
 
     nearest.opened = true;
+    if (nearest.rect) nearest.rect.setFillStyle(0x3a2a1a);  // darkened = looted
     this.inventory.add('potion', 1);
     this.events.emit('inventoryChanged', this.inventory);
     SharedSystems.floatText(this, nearest.x, nearest.y, '+ POTION', '#ff8888');
