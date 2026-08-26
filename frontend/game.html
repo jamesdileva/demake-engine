@@ -344,6 +344,7 @@ class TilemapRenderer {
     const template = MANIFEST.template;
     if (template === 'open_world_sandbox')    return this._buildCity();
     if (template === 'top_down_action_rpg')   return this._buildDungeonRooms();
+    if (template === 'turn_based_rpg')        return this._buildOverworld();
     return this._buildArena();
   }
 
@@ -465,7 +466,66 @@ class TilemapRenderer {
              worldWidth: this.worldW, worldHeight: this.worldH };
   }
 
-  // Original border arena — wave shooter, platformer, turn-based fallback
+  // Overworld route — grass, tall-grass encounter patches, trees, town → gym path
+  _buildOverworld() {
+    const p = MANIFEST.palette;
+    const grassCol = hexColor(p.primary,   '#2a6a2a');
+    const tallCol  = hexColor(p.secondary, '#3a8a3a');
+    const treeCol  = hexColor(p.accent,    '#1a4a1a');
+    const pathCol  = hexColor(p.highlight, '#8b6914');
+    const townCol  = 0xcc8844;
+
+    this.worldW = 480; this.worldH = 360;
+    this.scene.physics.world.setBounds(0, 0, this.worldW, this.worldH);
+    this.scene.cameras.main.setBounds(0, 0, this.worldW, this.worldH);
+    this.scene.add.rectangle(this.worldW/2, this.worldH/2, this.worldW, this.worldH, grassCol).setDepth(0);
+    this.walls = this.scene.physics.add.staticGroup();
+
+    // Path: town (top-left) → gym (bottom-right)
+    this.scene.add.rectangle(this.worldW*0.35, 48, this.worldW*0.7, 18, pathCol, 0.8).setDepth(1);
+    this.scene.add.rectangle(this.worldW - 56, 48 + (this.worldH - 130)/2, 18, this.worldH - 130, pathCol, 0.8).setDepth(1);
+    this.scene.add.rectangle(this.worldW*0.5, this.worldH - 40, this.worldW - 112, 18, pathCol, 0.8).setDepth(1);
+
+    // Town buildings near spawn
+    this._addWallRect(24, 20, 40, 32, townCol);
+    this._addWallRect(76, 24, 30, 28, townCol);
+
+    // Tree clusters (impassable)
+    for (let i = 0; i < 9; i++) {
+      const tx = Phaser.Math.Between(40, this.worldW - 60);
+      const ty = Phaser.Math.Between(40, this.worldH - 60);
+      const n = Phaser.Math.Between(1, 3);
+      for (let j = 0; j < n; j++) {
+        this._addWallRect(tx + j*18, ty + (j % 2)*18, 16, 16, treeCol);
+      }
+    }
+
+    // Tall-grass encounter patches (returned as enemy spawn zones)
+    const enemySpawns = [];
+    for (let i = 0; i < 5; i++) {
+      const px = Phaser.Math.Between(60, this.worldW - 110);
+      const py = Phaser.Math.Between(60, this.worldH - 90);
+      this.scene.add.rectangle(px, py, 48, 32, tallCol, 0.95).setDepth(1);
+      for (let gx = 0; gx < 3; gx++) for (let gy = 0; gy < 2; gy++) {
+        this.scene.add.rectangle(px - 16 + gx*16, py - 8 + gy*16, 12, 2, treeCol, 0.35).setDepth(2);
+      }
+      enemySpawns.push({ x: px, y: py, tileType: 'tall_grass' });
+    }
+
+    // Border trees
+    this._addWallRect(0, 0, this.worldW, 12, treeCol);
+    this._addWallRect(0, this.worldH - 12, this.worldW, 12, treeCol);
+    this._addWallRect(0, 0, 12, this.worldH, treeCol);
+    this._addWallRect(this.worldW - 12, 0, 12, this.worldH, treeCol);
+
+    const playerSpawn = { x: 40, y: 76 };
+    console.log(`[Tilemap] Overworld fallback: ${this.worldW}x${this.worldH}, ` +
+      `${enemySpawns.length} grass patches`);
+    return { walls: this.walls, playerSpawn, enemySpawns, itemSpawns: [],
+             worldWidth: this.worldW, worldHeight: this.worldH };
+  }
+
+  // Original border arena — wave shooter, platformer fallback
   _buildArena() {
     const p = MANIFEST.palette;
     const bgColor = typeof p.background === 'number' ? p.background
@@ -2256,8 +2316,9 @@ class TurnOverworldScene extends Phaser.Scene {
     this.worldH = worldHeight;
     this.tileGrid = MANIFEST?.tilemap?.grid;
 
-    // No tilemap (smoke path) — virtual gym so the boss loop is testable (Sprint 8E)
+    // No tilemap (smoke path) — virtual gym + grass encounter zones (Sprint 8E)
     this.fallbackGym = null;
+    this.fallbackGrassZones = null;
     if (!this.tileGrid) {
       this.fallbackGym = { x: worldWidth * 0.72, y: worldHeight * 0.72 };
       const g = this.add.rectangle(this.fallbackGym.x, this.fallbackGym.y, 16, 16, 0xaa3333).setDepth(3);
@@ -2265,6 +2326,7 @@ class TurnOverworldScene extends Phaser.Scene {
       this.add.text(this.fallbackGym.x - 5, this.fallbackGym.y - 6, 'G',
         { fontSize: '10px', color: '#ffdddd',
           stroke: '#000000', strokeThickness: 2 }).setDepth(4);
+      if (tileEnemySpawns.length > 0) this.fallbackGrassZones = tileEnemySpawns;
     }
 
     // ── Player ───────────────────────────────────────────────
@@ -2327,6 +2389,19 @@ class TurnOverworldScene extends Phaser.Scene {
           this.fallbackGym.x, this.fallbackGym.y) < 20) {
       this._triggerBossBattle();
       return;
+    }
+
+    // ── Fallback tall-grass encounter zones (no tilemap) ──────
+    if (this.fallbackGrassZones) {
+      for (const z of this.fallbackGrassZones) {
+        if (Math.abs(this.player.x - z.x) < 26 && Math.abs(this.player.y - z.y) < 22) {
+          if (Math.random() < 0.012 && this.time.now > this._encounterCooldown) {
+            this._encounterCooldown = this.time.now + 3000;
+            this._triggerBattle();
+            return;
+          }
+        }
+      }
     }
 
     // ── Check tile under player ─────────────────────────────
@@ -2732,6 +2807,23 @@ class TurnBasedScene extends Phaser.Scene {
 
   _gameOver() {
     this.busy = true;
+    // Boss loss — never a dead end: return to overworld to heal and retry (Sprint 8E)
+    if (this.isBoss && this.fromOverworld) {
+      this._log('Defeated by the gym leader...');
+      const totalScore = this.overworldScore + this.score;
+      this.time.delayedCall(1400, () => {
+        this.scene.start('TurnOverworldScene', {
+          playerHp: Math.max(1, Math.floor(this.maxHp * 0.3)),
+          playerMp: this.playerMp,
+          overworldScore: totalScore,
+          encounters: this.encounters,
+          maxEncounters: this.maxEncounters,
+          returnX: this.returnX,
+          returnY: this.returnY,
+        });
+      });
+      return;
+    }
     if (this.fromOverworld) {
       this._showEndScreen('DEFEAT...', '#ff0000', this.overworldScore + this.score);
     } else {
