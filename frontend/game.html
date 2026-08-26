@@ -332,8 +332,135 @@ class TilemapRenderer {
     return { walls: this.walls, playerSpawn, enemySpawns, itemSpawns, worldWidth: this.worldW, worldHeight: this.worldH };
   }
 
-  /** Procedural fallback — used when no tilemap in manifest */
+  /** Procedural fallback — used when no tilemap in manifest.
+   *  Genre-aware so smoke tests resemble real WFC output (Sprint 8D feedback). */
   _buildProcedural() {
+    const template = MANIFEST.template;
+    if (template === 'open_world_sandbox')    return this._buildCity();
+    if (template === 'top_down_action_rpg')   return this._buildDungeonRooms();
+    return this._buildArena();
+  }
+
+  _addWallRect(x, y, w, h, color) {
+    const wall = this.scene.add.rectangle(x + w/2, y + h/2, w, h, color).setDepth(2);
+    this.scene.physics.add.existing(wall, true);
+    wall.tileType = 'wall';
+    this.walls.add(wall);
+    // bevel for depth
+    this.scene.add.rectangle(x + w/2, y + 1, w, 2, 0xffffff, 0.15).setDepth(3);
+    return wall;
+  }
+
+  _pointClear(x, y, margin = 20) {
+    let ok = true;
+    this.walls.children.each(w => {
+      if (x > w.x - w.width/2 - margin && x < w.x + w.width/2 + margin &&
+          y > w.y - w.height/2 - margin && y < w.y + w.height/2 + margin) ok = false;
+    });
+    return ok;
+  }
+
+  _randomClearPoints(count, worldW, worldH, margin = 60) {
+    const pts = [];
+    let guard = 0;
+    while (pts.length < count && guard++ < 200) {
+      const x = Phaser.Math.Between(margin, worldW - margin);
+      const y = Phaser.Math.Between(margin, worldH - margin);
+      if (this._pointClear(x, y)) pts.push({ x, y });
+    }
+    return pts;
+  }
+
+  // City blocks separated by roads — GTA-style fallback
+  _buildCity() {
+    const p = MANIFEST.palette;
+    const bgColor  = hexColor(p.background, '#0a0a0a');
+    const bldColor = hexColor(p.secondary,  '#4a4a5a');
+    const roadColor = hexColor(p.primary,   '#2a2a2a');
+
+    this.worldW = 640; this.worldH = 480;
+    this.scene.physics.world.setBounds(0, 0, this.worldW, this.worldH);
+    this.scene.cameras.main.setBounds(0, 0, this.worldW, this.worldH);
+    this.scene.add.rectangle(this.worldW/2, this.worldH/2, this.worldW, this.worldH, bgColor).setDepth(0);
+    this.walls = this.scene.physics.add.staticGroup();
+
+    // Road grid (lighter bands)
+    for (let i = 0; i <= 4; i++) {
+      this.scene.add.rectangle(32 + i * 144, this.worldH/2, 24, this.worldH, roadColor, 0.35).setDepth(1);
+    }
+    for (let i = 0; i <= 3; i++) {
+      this.scene.add.rectangle(this.worldW/2, 32 + i * 144, this.worldW, 24, roadColor, 0.35).setDepth(1);
+    }
+
+    // Buildings: one per block with random inset
+    for (let bx = 0; bx < 4; bx++) {
+      for (let by = 0; by < 3; by++) {
+        const x0 = 56 + bx * 144, y0 = 56 + by * 144;
+        const bw = Phaser.Math.Between(70, 104);
+        const bh = Phaser.Math.Between(60, 96);
+        const wx = x0 + Phaser.Math.Between(0, 120 - bw);
+        const wy = y0 + Phaser.Math.Between(0, 120 - bh);
+        this._addWallRect(wx, wy, bw, bh, bldColor);
+      }
+    }
+
+    // Border walls
+    this._addWallRect(0, 0, this.worldW, 16, bldColor);
+    this._addWallRect(0, this.worldH - 16, this.worldW, 16, bldColor);
+    this._addWallRect(0, 0, 16, this.worldH, bldColor);
+    this._addWallRect(this.worldW - 16, 0, 16, this.worldH, bldColor);
+
+    const playerSpawn = { x: this.worldW/2, y: this.worldH/2 };
+    const enemySpawns = this._randomClearPoints(8, this.worldW, this.worldH)
+      .map(pt => ({ ...pt, tileType: 'npc' }));
+    console.log(`[Tilemap] City fallback: ${this.worldW}x${this.worldH}, ` +
+      `${this.walls.countActive(true)} structures, ${enemySpawns.length} NPC spawns`);
+    return { walls: this.walls, playerSpawn, enemySpawns, itemSpawns: [],
+             worldWidth: this.worldW, worldHeight: this.worldH };
+  }
+
+  // Interior walls / pillars — dungeon-room fallback for ARPG
+  _buildDungeonRooms() {
+    const p = MANIFEST.palette;
+    const bgColor = hexColor(p.background, '#0a0a1a');
+    const wallColor = hexColor(p.secondary, '#160a16');
+
+    this.worldW = 512; this.worldH = 384;
+    this.scene.physics.world.setBounds(0, 0, this.worldW, this.worldH);
+    this.scene.cameras.main.setBounds(0, 0, this.worldW, this.worldH);
+    this.scene.add.rectangle(this.worldW/2, this.worldH/2, this.worldW, this.worldH, bgColor).setDepth(0);
+    this.walls = this.scene.physics.add.staticGroup();
+
+    // Room divider with a doorway gap, plus random pillars
+    const midY = this.worldH/2;
+    this._addWallRect(0, midY - 8, this.worldW/2 - 40, 16, wallColor);
+    this._addWallRect(this.worldW/2 + 40, midY - 8, this.worldW/2 - 40, 16, wallColor);
+    const midX = this.worldW/2;
+    this._addWallRect(midX - 8, 0, 16, this.worldH/2 - 40, wallColor);
+    this._addWallRect(midX - 8, this.worldH/2 + 40, 16, this.worldH/2 - 40, wallColor);
+    for (let i = 0; i < 6; i++) {
+      const x = Phaser.Math.Between(60, this.worldW - 100);
+      const y = Phaser.Math.Between(60, this.worldH - 100);
+      if (this._pointClear(x, y, 50)) this._addWallRect(x, y, 32, 32, wallColor);
+    }
+
+    // Border walls
+    this._addWallRect(0, 0, this.worldW, 16, wallColor);
+    this._addWallRect(0, this.worldH - 16, this.worldW, 16, wallColor);
+    this._addWallRect(0, 0, 16, this.worldH, wallColor);
+    this._addWallRect(this.worldW - 16, 0, 16, this.worldH, wallColor);
+
+    const playerSpawn = { x: this.worldW/4, y: this.worldH/4 };
+    const enemySpawns = this._randomClearPoints(5, this.worldW, this.worldH)
+      .map(pt => ({ ...pt, tileType: 'enemy' }));
+    console.log(`[Tilemap] Dungeon fallback: ${this.worldW}x${this.worldH}, ` +
+      `${this.walls.countActive(true)} walls, ${enemySpawns.length} enemy spawns`);
+    return { walls: this.walls, playerSpawn, enemySpawns, itemSpawns: [],
+             worldWidth: this.worldW, worldHeight: this.worldH };
+  }
+
+  // Original border arena — wave shooter, platformer, turn-based fallback
+  _buildArena() {
     const p = MANIFEST.palette;
     const bgColor = typeof p.background === 'number' ? p.background
       : parseInt((p.background||'#0a0a0a').replace('#',''),16);
@@ -345,18 +472,11 @@ class TilemapRenderer {
     this.scene.add.rectangle(W/2, H/2, W, H, bgColor).setDepth(0);
     this.walls = this.scene.physics.add.staticGroup();
 
-    // Border walls
-    [
-      [W/2, 8,    W, 16],
-      [W/2, H-8,  W, 16],
-      [8,   H/2,  16, H],
-      [W-8, H/2,  16, H],
-    ].forEach(([x,y,w,h]) => {
-      const wc = hexColor(p.secondary, '#2a2a3a');
-      const wall = this.scene.add.rectangle(x, y, w, h, wc).setDepth(2);
-      this.scene.physics.add.existing(wall, true);
-      this.walls.add(wall);
-    });
+    const wc = hexColor(p.secondary, '#2a2a3a');
+    this._addWallRect(0, 0, W, 16, wc);
+    this._addWallRect(0, H - 16, W, 16, wc);
+    this._addWallRect(0, 0, 16, H, wc);
+    this._addWallRect(W - 16, 0, 16, H, wc);
 
     return {
       walls: this.walls,
@@ -1878,10 +1998,13 @@ class OpenWorldScene extends Phaser.Scene {
 
     // ── Physics ────────────────────────────────────────────────
     this.police = this.physics.add.group();  // Sprint 8D
+    this.projectiles = new ProjectileSystem(this, 'bullet', walls);  // pistol
     this.physics.add.collider(this.player, this.walls);
     this.physics.add.collider(this.npcs,   this.walls);
     this.physics.add.collider(this.police, this.walls);
     this.physics.add.overlap(this.player, this.police, this._touchPolice, null, this);
+    this.physics.add.overlap(this.projectiles.group, this.npcs,   this._shootNPC, null, this);
+    this.physics.add.overlap(this.projectiles.group, this.police, this._shootCop, null, this);
 
     // ── Camera ─────────────────────────────────────────────────
     this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
@@ -1927,8 +2050,31 @@ class OpenWorldScene extends Phaser.Scene {
       const cop = this.police.create(x, y, 'enemy', 0);
       cop.setTint(0x4488ff).setDepth(6).setScale(0.9);  // blue = police
       cop.body.setSize(10, 10);
+      cop.hp = cop.maxHp = 30 + this.wanted * 10;
       cop.speed  = 55 + this.wanted * 15;
-      cop.damage = 8 + this.wanted * 4;
+      cop.damage = 6 + this.wanted * 3;
+    }
+  }
+
+  // ── Pistol fire — facing direction (Sprint 8D feedback) ────
+  _fire() {
+    const ang = this.player.flipX ? Math.PI : 0;
+    this.projectiles.fire(this.player.x, this.player.y, ang, 320,
+      { damage: 34, ttlMs: 1500 });
+    this.cameras.main.shake(40, 0.003);
+  }
+
+  _shootNPC(proj, npc) {
+    proj.destroy();
+    npc.destroy();
+    this._setWanted(this.wanted + 1);
+  }
+
+  _shootCop(proj, cop) {
+    proj.destroy();
+    if (SharedSystems.applyDamage(this, cop, proj.damage, { tint: 0x4488ff })) {
+      cop.destroy();
+      this._setWanted(this.wanted + 1);  // shooting a cop is a crime
     }
   }
 
@@ -1984,17 +2130,9 @@ class OpenWorldScene extends Phaser.Scene {
       if (this.anims.exists('player_idle')) this.player.play('player_idle', true);
     }
 
-    // Attack NPCs — increases wanted level (Sprint 8D)
+    // Attack — fire pistol in facing direction (Sprint 8D feedback)
     if (Phaser.Input.Keyboard.JustDown(k.attack)) {
-      let hit = false;
-      this.npcs.children.each(npc => {
-        if (!npc.active) return;
-        if (Phaser.Math.Distance.Between(this.player.x, this.player.y, npc.x, npc.y) < 40) {
-          npc.destroy();
-          hit = true;
-        }
-      });
-      if (hit) this._setWanted(this.wanted + 1);
+      this._fire();
     }
 
     // ── Civilians — always wander, never hostile (Sprint 8D) ──
@@ -2070,8 +2208,9 @@ class OpenWorldHUD extends Phaser.Scene {
     });
     gs.events.on('gameOver', score => {
       this.add.rectangle(W/2,H/2,W,H,0x000000,0.75).setDepth(40);
-      this.add.text(W/2,H/2-15,'BUSTED!',{fontSize:'24px',fontFamily:'Courier New',color:'#ff0000',stroke:'#000',strokeThickness:3}).setDepth(41).setOrigin(0.5);
+      this.add.text(W/2,H/2-15,'WASTED!',{fontSize:'24px',fontFamily:'Courier New',color:'#ff0000',stroke:'#000',strokeThickness:3}).setDepth(41).setOrigin(0.5);
       this.add.text(W/2,H/2+10,`CASH: $${score}`,{fontSize:'11px',fontFamily:'Courier New',color:'#ffcc00'}).setDepth(41).setOrigin(0.5);
+      this.add.text(W/2,H/2+28,'(DIED — BUSTED IS DIFFERENT: HALF CASH, KEEP PLAYING)',{fontSize:'7px',fontFamily:'Courier New',color:'#666'}).setDepth(41).setOrigin(0.5);
     });
   }
 }
