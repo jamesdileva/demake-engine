@@ -1,6 +1,7 @@
 """
 Core Demake API routes — matches the architecture doc exactly.
 
+POST /api/v1/demake/generate     — genre-only generation, no upload (Sprint 8F)
 POST /api/v1/demake/upload       — upload video, create DB record, enqueue job
 GET  /api/v1/demake/{id}/status  — poll pipeline progress
 GET  /api/v1/demake/{id}/manifest — fetch completed game manifest
@@ -10,6 +11,7 @@ WS   /ws/demake/{id}             — real-time progress stream
 import os
 import json
 import uuid
+import random
 import aiofiles
 from datetime import datetime
 
@@ -18,6 +20,7 @@ from fastapi import (
     HTTPException, WebSocket, WebSocketDisconnect
 )
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database.db import get_db
@@ -46,6 +49,66 @@ STATUS_META = {
     "ready":              (8, 100, "Your demake is ready to play!"),
     "failed":             (0, 0,   "Pipeline failed."),
 }
+
+
+# ── POST /api/v1/demake/generate (Sprint 8F — Genre-Only Mode) ─────────────────
+VALID_GENRES = [
+    "wave_shooter",
+    "top_down_action_rpg",
+    "open_world_sandbox",
+    "side_scroll_platformer",
+    "turn_based_rpg",
+]
+
+class GenerateRequest(BaseModel):
+    genre: str
+    seed: int | None = None   # optional — same seed reproduces the same world
+
+@router.post("/generate")
+async def generate_genre_only(
+    req: GenerateRequest,
+    db:  Session    = Depends(get_db)
+):
+    """
+    Genre-Only Mode (-1): generate a playable world slice from just a genre pick.
+    No upload, no VLM call — DNA is synthesized from template defaults + seed.
+
+    Returns: { demake_id, status, genre, seed }
+    Errors:  422 if genre unknown
+    """
+    if req.genre not in VALID_GENRES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown genre '{req.genre}'. Valid: {', '.join(VALID_GENRES)}"
+        )
+
+    demake_id = str(uuid.uuid4())
+    seed = req.seed if req.seed is not None else random.randint(0, 2**31 - 1)
+
+    # Encode genre+seed in source_path so the orchestrator detects genre-only
+    # jobs (source_path starting with synth://) without a DB migration.
+    demake = Demake(
+        id          = demake_id,
+        title       = f"{req.genre} (genre-only)",
+        status      = "queued",
+        source_path = f"synth://{req.genre}?seed={seed}",
+        created_at  = datetime.utcnow(),
+    )
+    db.add(demake)
+    db.commit()
+    db.refresh(demake)
+
+    await enqueue(demake_id)
+
+    print(f"[Generate] genre={req.genre} seed={seed} -> {demake_id[:8]}")
+
+    return {
+        "demake_id": demake_id,
+        "status":    "queued",
+        "genre":     req.genre,
+        "seed":      seed,
+        "message":   "Genre-only generation started. Sprites, audio and world are being built..."
+    }
 
 
 # ── POST /api/v1/demake/upload ─────────────────────────────────────────────────

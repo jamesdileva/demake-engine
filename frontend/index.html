@@ -59,6 +59,59 @@
     box-shadow: 0 0 40px #ff220011;
   }
 
+  /* ── Mode tabs (Sprint 8F) ── */
+  .mode-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  .mode-tab {
+    flex: 1;
+    padding: 10px 6px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: 'Courier New', monospace;
+    font-size: 10px;
+    letter-spacing: 2px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .mode-tab.active {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: #ff44000a;
+  }
+
+  /* ── Genre-only section ── */
+  #genre-section label {
+    display: block;
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+  #genre-select {
+    width: 100%;
+    padding: 12px;
+    background: #1a0800;
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    letter-spacing: 1px;
+    margin-bottom: 14px;
+    cursor: pointer;
+  }
+  #genre-select:focus { outline: 1px solid var(--primary); }
+  .genre-hint {
+    font-size: 9px;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+    margin-bottom: 16px;
+    line-height: 1.8;
+  }
+
   /* ── Upload zone ── */
   .upload-zone {
     border: 2px dashed var(--border);
@@ -263,13 +316,19 @@
 
 <div class="header">
   <h1>DEMAKE ENGINE</h1>
-  <p>UPLOAD A GAME TRAILER — GET A PLAYABLE 8-BIT DEMAKE</p>
+  <p>PICK A GENRE (OR UPLOAD A TRAILER) — GET A PLAYABLE 8-BIT DEMAKE</p>
 </div>
 
 <div class="card">
 
+  <!-- Mode tabs -->
+  <div class="mode-tabs">
+    <button class="mode-tab active" id="tab-genre">◆ GENRE-ONLY</button>
+    <button class="mode-tab" id="tab-trailer">▶ UPLOAD TRAILER</button>
+  </div>
+
   <!-- Upload form -->
-  <div id="upload-section">
+  <div id="upload-section" style="display:none;">
     <div class="upload-zone" id="drop-zone">
       <input type="file" id="file-input" accept=".mp4" />
       <span class="upload-icon">🎮</span>
@@ -281,6 +340,25 @@
 
     <button class="btn" id="upload-btn" disabled>
       ◆ GENERATE DEMAKE ◆
+    </button>
+  </div>
+
+  <!-- Genre-only form (default) -->
+  <div id="genre-section">
+    <label>CHOOSE A GENRE</label>
+    <select id="genre-select">
+      <option value="wave_shooter">WAVE SHOOTER — survive the horde</option>
+      <option value="top_down_action_rpg">ACTION RPG — dungeon + boss</option>
+      <option value="open_world_sandbox">OPEN WORLD — city + wanted stars</option>
+      <option value="side_scroll_platformer">PLATFORMER — run + jump + flag</option>
+      <option value="turn_based_rpg">TURN-BASED RPG — encounters + gym</option>
+    </select>
+    <div class="genre-hint">
+      NO UPLOAD NEEDED — WORLD IS GENERATED PROCEDURALLY.<br>
+      SAME SEED = SAME WORLD (OPTIONAL, FOR SHARING).
+    </div>
+    <button class="btn" id="generate-btn">
+      ◆ GENERATE WORLD ◆
     </button>
   </div>
 
@@ -321,14 +399,67 @@
 </div>
 
 <div class="footer">
-  <span>WORKS BEST WITH:</span><br>
-  GAME TRAILERS · 30-120 SECONDS · ACTION / RPG / SHOOTER<br>
-  <span>POWERED BY STABLE DIFFUSION · MOONDREAM · TONE.JS</span>
+  <span>MODES:</span> GENRE-ONLY (INSTANT) · TRAILER UPLOAD (AI ART DIRECTION)<br>
+  <span>POWERED BY STABLE DIFFUSION · WFC TILEMAPS · TONE.JS</span>
 </div>
 
 <script>
 // ── Config ────────────────────────────────────────────────────────────────────
 const API_BASE = "http://localhost:8000";   // FastAPI backend — must be running
+
+// ── Mode tabs (Sprint 8F) ─────────────────────────────────────────────────────
+const tabGenre   = document.getElementById("tab-genre");
+const tabTrailer = document.getElementById("tab-trailer");
+const genreSection   = document.getElementById("genre-section");
+const uploadSection2 = document.getElementById("upload-section");
+
+tabGenre.addEventListener("click", () => {
+  tabGenre.classList.add("active");
+  tabTrailer.classList.remove("active");
+  genreSection.style.display = "block";
+  uploadSection2.style.display = "none";
+});
+tabTrailer.addEventListener("click", () => {
+  tabTrailer.classList.add("active");
+  tabGenre.classList.remove("active");
+  uploadSection2.style.display = "block";
+  genreSection.style.display = "none";
+});
+
+// ── Genre-only generation (Sprint 8F) ────────────────────────────────────────
+document.getElementById("generate-btn").addEventListener("click", async () => {
+  const genre = document.getElementById("genre-select").value;
+  const btn = document.getElementById("generate-btn");
+
+  btn.disabled = true;
+  btn.textContent = "STARTING...";
+
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/demake/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ genre }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || `Generate failed (${res.status})`);
+    }
+
+    const data = await res.json();
+    currentDemakeId = data.demake_id;
+    showLog(`Seed ${data.seed} — building your ${genre.replace(/_/g, " ")} world...`);
+
+    genreSection.style.display = "none";
+    progressSection.style.display = "block";
+    startProgressTracking(currentDemakeId);
+
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = "◆ GENERATE WORLD ◆";
+    showLog(`Error: ${err.message} — is the backend running?`, true);
+  }
+});
 
 // ── Pipeline stages shown in the UI ──────────────────────────────────────────
 const STAGES = [

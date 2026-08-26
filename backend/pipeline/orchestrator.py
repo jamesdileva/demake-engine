@@ -130,29 +130,54 @@ async def _run_pipeline(demake_id: str):
         output_dir = os.path.join("outputs", demake_id)
         os.makedirs(output_dir, exist_ok=True)
 
-        # ── Stage 2: Extract frames (REAL — Sprint 2) ─────────────────────
-        await _set_status(db, demake, "extracting_frames", 2, 15,
-                          "Extracting keyframes from video...")
-        ingestion_result = await asyncio.get_event_loop().run_in_executor(
-            None, run_ingestion, demake.source_path, output_dir
-        )
-        best_frames = ingestion_result["best_frames"]
-        print(f"[Pipeline] Extracted {ingestion_result['frame_count']} frames, "
-              f"best {len(best_frames)} selected")
+        # ── Mode check — genre-only jobs skip ingestion + VLM (Sprint 8F) ──
+        is_genre_only = bool(demake.source_path and
+                             demake.source_path.startswith("synth://"))
 
-        # ── Stage 3: VLM Analysis (REAL — Sprint 2) ───────────────────────
-        await _set_status(db, demake, "analyzing", 3, 30,
-                          "Analyzing game DNA with vision model...")
-        dna = await asyncio.get_event_loop().run_in_executor(
-            None, run_vlm_analysis, best_frames, output_dir, _CONFIG
-        )
+        if is_genre_only:
+            from urllib.parse import urlparse, parse_qs
+            from pipeline.dna_synthesizer import synthesize_dna
 
-        # ── Stage 4: Genre Matching + Validation (REAL — Sprint 2) ───────
-        await _set_status(db, demake, "matching_genre", 4, 45,
-                          "Matching genre template...")
-        template_id = match_genre_template(dna, _CONFIG)
+            parsed = urlparse(demake.source_path)
+            genre = parsed.netloc
+            seed_q = parse_qs(parsed.query).get("seed", ["0"])
+            seed = int(seed_q[0]) if seed_q[0].isdigit() else 0
 
-        # Update DB with extracted config
+            await _set_status(db, demake, "matching_genre", 4, 45,
+                              f"Synthesizing {genre} world DNA...")
+            dna = await asyncio.get_event_loop().run_in_executor(
+                None, synthesize_dna, genre, seed
+            )
+            template_id = genre
+            # Use the synthesized title for the manifest (not the DB placeholder)
+            demake.title = dna.title_guess
+            db.commit()
+            print(f"[Pipeline] Genre-only DNA synthesized: {template_id} "
+                  f"(seed {seed})")
+        else:
+            # ── Stage 2: Extract frames (REAL — Sprint 2) ─────────────────
+            await _set_status(db, demake, "extracting_frames", 2, 15,
+                              "Extracting keyframes from video...")
+            ingestion_result = await asyncio.get_event_loop().run_in_executor(
+                None, run_ingestion, demake.source_path, output_dir
+            )
+            best_frames = ingestion_result["best_frames"]
+            print(f"[Pipeline] Extracted {ingestion_result['frame_count']} frames, "
+                  f"best {len(best_frames)} selected")
+
+            # ── Stage 3: VLM Analysis (REAL — Sprint 2) ───────────────────
+            await _set_status(db, demake, "analyzing", 3, 30,
+                              "Analyzing game DNA with vision model...")
+            dna = await asyncio.get_event_loop().run_in_executor(
+                None, run_vlm_analysis, best_frames, output_dir, _CONFIG
+            )
+
+            # ── Stage 4: Genre Matching + Validation (REAL — Sprint 2) ────
+            await _set_status(db, demake, "matching_genre", 4, 45,
+                              "Matching genre template...")
+            template_id = match_genre_template(dna, _CONFIG)
+
+        # ── Shared: persist extracted config ─────────────────────────────
         import json as _json
         from database.models import GameConfig
         game_cfg = GameConfig(
