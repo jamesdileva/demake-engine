@@ -816,13 +816,13 @@ WFC-generated map). The "full loop" depth work is partially done per genre:
 
 | Sprint | Scope | Status |
 |---|---|---|
-| 8A | Shared game systems (entities, inventory, projectiles) | 🔶 **IN PROGRESS** |
+| 8A | Shared game systems (entities, inventory, projectiles) | ✅ SharedSystems/Inventory/ProjectileSystem wired into wave shooter + ARPG; chest→potion→heal loop verified |
 | 8B | Wave Shooter full loop | ✅ Waves, boss every N, ammo/reload, score, death |
-| 8C | Top Down ARPG full loop | 🔶 Melee + magic + room clear done; chest loot & consumables missing |
-| 8D | Open World full loop | 🔶 Wanted stars + missions exist but minimal (no police escalation, no busted/arrest state) |
+| 8C | Top Down ARPG full loop | 🔶 Melee + projectile magic + chest loot + room clear done; final-room boss deferred to completion items |
+| 8D | Open World full loop | 🔶 **IN PROGRESS** — escalation work started |
 | 8E | Turn Based full loop | 🔶 Overworld → random encounters → battle loop done; no gym/boss endpoint as win condition |
 
-### Sprint 8A: Shared Game Systems — 🚧 CURRENT SPRINT
+### Sprint 8A: Shared Game Systems — ✅ COMPLETE
 
 **Plan & Scope:** Extract the combat plumbing duplicated across templates into reusable,
 shared systems inside `game.html`, then wire them into the scenes that need them.
@@ -849,10 +849,28 @@ shared systems inside `game.html`, then wire them into the scenes that need them
       Phaser before scene classes were evaluated (TDZ crash — `loadManifest()` now
       deferred to script end), (2) scenes crashed on integer palette values
       (`hexColor()` helper added)
-- [ ] **Deliverable:** ARPG run: find chest → get potion → drink it → clear room with
+- [x] **Deliverable:** ARPG run: find chest → get potion → drink it → clear room with
       projectile magic. Wave shooter unchanged behaviorally but on shared systems.
-      *(Boot verified headless for all templates — one manual browser play-through
-      still pending)*
+      *(Verified by user play-through)*
+
+### Sprint 8D Completion: Wanted System Escalation — 🚧 CURRENT SPRINT
+
+**Plan & Scope:** Turn the minimal wanted-stars into a real GTA-style heat system.
+
+- [ ] `Police` group — distinct from civilians (blue tint), spawn at world edges
+      when wanted rises: 1 cop per star, speed + damage scale with wanted level
+- [ ] Civilians no longer turn hostile — they always wander; police handle
+      all enforcement (removes old "everyone chases you" behavior)
+- [ ] Police contact damage scales with wanted level; death still possible
+- [ ] **Busted state**: at 3★+, if 2+ cops stay within grab range for 1.5s →
+      "BUSTED!" — lose half your cash, wanted resets to 0, cops disperse,
+      player respawns at spawn point (arrest instead of death)
+- [ ] Wanted decay: 1 star drops every 20s without committing a crime (evade mechanic)
+- [ ] HUD: wanted stars flash while cops are actively chasing; transient
+      "BUSTED! LOST HALF CASH" overlay on arrest
+- [ ] Smoke test `open_world_sandbox` clean (correct scene, no console errors)
+- [ ] **Deliverable:** manual run: attack NPC → 1★ cop chases → escalate to 3★ →
+      get busted → respawn with half cash → evade until stars decay to 0
 
 ### Sprint 8B–8E Completion Items
 

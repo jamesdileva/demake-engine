@@ -1829,6 +1829,8 @@ class OpenWorldScene extends Phaser.Scene {
     this.maxWanted = cfg.world?.wanted_max || 5;
     this.gameOver  = false;
     this._damageCooldown = 0;
+    this._lastCrimeTime = 0;   // Sprint 8D — wanted decay timer
+    this._grabTimer     = 0;   // Sprint 8D — busted accumulation
 
     // ── World — TilemapRenderer ────────────────────────────
     const tileRenderer = new TilemapRenderer(this);
@@ -1837,6 +1839,7 @@ class OpenWorldScene extends Phaser.Scene {
     this.walls  = walls;
     this.worldW = worldWidth;
     this.worldH = worldHeight;
+    this.playerSpawn = { x: playerSpawn.x, y: playerSpawn.y };
 
     // ── NPCs ──────────────────────────────────────────────────
     this.npcs = this.physics.add.group();
@@ -1874,9 +1877,11 @@ class OpenWorldScene extends Phaser.Scene {
       { fontSize:'7px', fontFamily:'Courier New', color:'#ffff00' }).setDepth(8).setOrigin(0.5);
 
     // ── Physics ────────────────────────────────────────────────
+    this.police = this.physics.add.group();  // Sprint 8D
     this.physics.add.collider(this.player, this.walls);
     this.physics.add.collider(this.npcs,   this.walls);
-    this.physics.add.overlap(this.player, this.npcs, this._touchNPC, null, this);
+    this.physics.add.collider(this.police, this.walls);
+    this.physics.add.overlap(this.player, this.police, this._touchPolice, null, this);
 
     // ── Camera ─────────────────────────────────────────────────
     this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
@@ -1894,17 +1899,73 @@ class OpenWorldScene extends Phaser.Scene {
     this.scene.launch('OpenWorldHUD', { gameScene: this });
   }
 
-  _touchNPC(player, npc) {
-    if (!npc.isHostile) return;
+  // ── Sprint 8D — wanted level management ────────────────────
+  _setWanted(n) {
+    n = Phaser.Math.Clamp(n, 0, this.maxWanted);
+    if (n === this.wanted) return;
+    this.wanted = n;
+    this._lastCrimeTime = this.time.now;
+
+    // Keep one active cop per star
+    const active = this.police.countActive(true);
+    if (n > active) this._spawnPolice(n - active);
+    if (n === 0) {
+      this.police.children.each(c => { if (c.active) c.destroy(); });
+      this._grabTimer = 0;
+    }
+    this.events.emit('wantedChanged', n);
+  }
+
+  _spawnPolice(count) {
+    for (let i = 0; i < count; i++) {
+      // Spawn just off a random world edge
+      const edge = Phaser.Math.Between(0, 3);
+      const x = edge === 0 ? 20 : edge === 1 ? this.worldW - 20
+              : Phaser.Math.Between(40, this.worldW - 40);
+      const y = edge < 2 ? Phaser.Math.Between(40, this.worldH - 40)
+              : (edge === 2 ? 20 : this.worldH - 20);
+      const cop = this.police.create(x, y, 'enemy', 0);
+      cop.setTint(0x4488ff).setDepth(6).setScale(0.9);  // blue = police
+      cop.body.setSize(10, 10);
+      cop.speed  = 55 + this.wanted * 15;
+      cop.damage = 8 + this.wanted * 4;
+    }
+  }
+
+  _touchPolice(player, cop) {
     const now = this.time.now;
     if (now - this._damageCooldown < 600) return;
     this._damageCooldown = now;
-    this.hp -= 10;
+    this.hp -= cop.damage || 12;
     this.events.emit('hpChanged', this.hp);
+    this.cameras.main.shake(80, 0.008);
+    player.setTint(0x4488ff);
+    this.time.delayedCall(150, () => player.clearTint());
     if (this.hp <= 0) { this.gameOver = true; this.physics.pause(); this.events.emit('gameOver', this.cash); }
   }
 
-  update(time) {
+  // Arrest: 3★+ and 2+ cops in grab range for 1.5s → lose half cash, reset heat
+  _checkBusted(delta) {
+    if (this.wanted < 3) { this._grabTimer = 0; return; }
+    let grabbing = 0;
+    this.police.children.each(cop => {
+      if (cop.active &&
+          Phaser.Math.Distance.Between(cop.x, cop.y, this.player.x, this.player.y) < 30) {
+        grabbing++;
+      }
+    });
+    this._grabTimer = grabbing >= 2 ? this._grabTimer + delta : 0;
+    if (this._grabTimer >= 1500) {
+      this.cash = Math.floor(this.cash / 2);
+      this.events.emit('cashChanged', this.cash);
+      this._setWanted(0);
+      this.player.setPosition(this.playerSpawn.x, this.playerSpawn.y);
+      this.cameras.main.flash(300, 0, 0, 255);
+      this.events.emit('busted', this.cash);
+    }
+  }
+
+  update(time, delta) {
     if (this.gameOver) return;
     const spd = MANIFEST.game_config.physics?.player_speed || 100;
     const k   = this.keys;
@@ -1923,33 +1984,42 @@ class OpenWorldScene extends Phaser.Scene {
       if (this.anims.exists('player_idle')) this.player.play('player_idle', true);
     }
 
-    // Attack NPCs — increases wanted level
+    // Attack NPCs — increases wanted level (Sprint 8D)
     if (Phaser.Input.Keyboard.JustDown(k.attack)) {
+      let hit = false;
       this.npcs.children.each(npc => {
         if (!npc.active) return;
         if (Phaser.Math.Distance.Between(this.player.x, this.player.y, npc.x, npc.y) < 40) {
           npc.destroy();
-          this.wanted = Math.min(this.maxWanted, this.wanted + 1);
-          this.events.emit('wantedChanged', this.wanted);
+          hit = true;
         }
       });
+      if (hit) this._setWanted(this.wanted + 1);
     }
 
-    // NPC wander / chase
+    // ── Civilians — always wander, never hostile (Sprint 8D) ──
     this.npcs.children.each(npc => {
       if (!npc.active) return;
-      const dist = Phaser.Math.Distance.Between(npc.x, npc.y, this.player.x, this.player.y);
-      if (this.wanted > 0 && dist < 200) {
-        npc.isHostile = true;
-        const angle = Phaser.Math.Angle.Between(npc.x, npc.y, this.player.x, this.player.y);
-        npc.body.setVelocity(Math.cos(angle)*70, Math.sin(angle)*70);
-      } else {
-        npc.isHostile = false;
-        npc.wanderTimer -= 16;
-        if (npc.wanderTimer <= 0) { npc.wanderAngle += (Math.random()-0.5)*1.5; npc.wanderTimer = 1000; }
-        npc.body.setVelocity(Math.cos(npc.wanderAngle)*25, Math.sin(npc.wanderAngle)*25);
-      }
+      npc.wanderTimer -= 16;
+      if (npc.wanderTimer <= 0) { npc.wanderAngle += (Math.random()-0.5)*1.5; npc.wanderTimer = 1000; }
+      npc.body.setVelocity(Math.cos(npc.wanderAngle)*25, Math.sin(npc.wanderAngle)*25);
     });
+
+    // ── Police — chase while wanted > 0 (Sprint 8D) ───────────
+    this.police.children.each(cop => {
+      if (!cop.active) return;
+      const angle = Phaser.Math.Angle.Between(cop.x, cop.y, this.player.x, this.player.y);
+      cop.body.setVelocity(Math.cos(angle) * cop.speed, Math.sin(angle) * cop.speed);
+      cop.setFlipX(this.player.x < cop.x);
+    });
+
+    // ── Wanted decay — 1 star per 20s without crime (Sprint 8D) ──
+    if (this.wanted > 0 && this.time.now - this._lastCrimeTime > 20000) {
+      this._setWanted(this.wanted - 1);
+    }
+
+    // ── Arrest check (Sprint 8D) ──────────────────────────────
+    this._checkBusted(delta);
 
     // Mission check
     if (Phaser.Math.Distance.Between(this.player.x, this.player.y, this.missionX, this.missionY) < 30) {
@@ -1979,7 +2049,25 @@ class OpenWorldHUD extends Phaser.Scene {
     const gs = this.gs;
     gs.events.on('hpChanged',     v => { this.hpBar.width = 80 * Math.max(0,v) / 100; });
     gs.events.on('cashChanged',   v => this.cashText.setText(`$${v}`));
-    gs.events.on('wantedChanged', v => this.wantedText.setText('★'.repeat(v) + '☆'.repeat(5-v)));
+    gs.events.on('wantedChanged', v => {
+      this.wantedText.setText('★'.repeat(v) + '☆'.repeat(5-v));
+      // Flash while cops are actively hunting (Sprint 8D)
+      this.tweens.killTweensOf(this.wantedText);
+      if (v > 0) {
+        this.tweens.add({ targets: this.wantedText, alpha: 0.25,
+          duration: 300, yoyo: true, repeat: -1 });
+      } else {
+        this.wantedText.setAlpha(1);
+      }
+    });
+    gs.events.on('busted', cash => {
+      const t = this.add.text(W/2, H/2 - 40, 'BUSTED! LOST HALF CASH', {
+        fontSize: '12px', fontFamily: 'Courier New', color: '#4488ff',
+        stroke: '#000', strokeThickness: 3
+      }).setDepth(30).setOrigin(0.5);
+      this.tweens.add({ targets: t, alpha: 0, duration: 2200,
+        onComplete: () => t.destroy() });
+    });
     gs.events.on('gameOver', score => {
       this.add.rectangle(W/2,H/2,W,H,0x000000,0.75).setDepth(40);
       this.add.text(W/2,H/2-15,'BUSTED!',{fontSize:'24px',fontFamily:'Courier New',color:'#ff0000',stroke:'#000',strokeThickness:3}).setDepth(41).setOrigin(0.5);
