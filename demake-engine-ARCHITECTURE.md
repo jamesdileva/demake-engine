@@ -820,7 +820,7 @@ WFC-generated map). The "full loop" depth work is partially done per genre:
 | 8B | Wave Shooter full loop | ✅ Waves, boss every N, ammo/reload, score, death |
 | 8C | Top Down ARPG full loop | 🔶 Melee + projectile magic + chest loot + room clear done; final-room boss deferred to completion items |
 | 8D | Open World full loop | ✅ Police escalation per star, busted/arrest state, wanted decay, pistol combat, WASTED/BUSTED split |
-| 8E | Turn Based full loop | 🔶 **IN PROGRESS** — gym/boss endpoint work started |
+| 8E | Turn Based full loop | ✅ Gym tile at route's end → gym leader boss battle → badge victory; boss loss returns to overworld |
 
 ### Sprint 8A: Shared Game Systems — ✅ COMPLETE
 
@@ -879,33 +879,35 @@ shared systems inside `game.html`, then wire them into the scenes that need them
       get busted → respawn with half cash → evade until stars decay to 0
       *(Verified by user play-through)*
 
-### Sprint 8E Completion: Gym Boss Endpoint — 🚧 CURRENT SPRINT
+### Sprint 8E Completion: Gym Boss Endpoint — ✅ COMPLETE
 
 **Plan & Scope:** Give the turn-based loop a real win condition: a gym boss at the
 end of the overworld route, replacing "survive N encounters" as the goal.
 
 **Backend (`tilemap_gen.py`):**
-- [ ] `gym` tile type in the turn_based_rpg tile set (passable, triggers boss battle
+- [x] `gym` tile type in the turn_based_rpg tile set (passable, triggers boss battle
       on step; visually distinct red + "G" marker in the renderer)
-- [ ] Turn-based map generation places the gym at the path's destination
+- [x] Turn-based map generation places the gym at the path's destination
       (bottom-right), with the approach kept clear of trees
 
 **Frontend (`game.html`):**
-- [ ] `TurnOverworldScene`: stepping on a gym tile triggers a boss battle
-      (also a fallback gym position in the no-tilemap smoke path)
-- [ ] `TurnBasedScene`: boss battle mode — enemy HP scaled by `boss.hp_mult`,
-      larger sprite, "GYM LEADER BATTLE" label
-- [ ] Boss win → "VICTORY! GYM BADGE EARNED!" end screen (the run's win condition);
-      boss loss → return to overworld at the gym entrance to heal and retry
-- [ ] Smoke test `turn_based_rpg` clean
-- [ ] **Deliverable:** manual run: fight encounters to level up → reach gym →
-      beat the gym leader → victory screen
+- [x] `TurnOverworldScene`: stepping on a gym tile triggers a boss battle
+      (also a fallback gym position + tall-grass encounter zones in the
+      no-tilemap smoke path, via a dedicated overworld fallback map)
+- [x] `TurnBasedScene`: boss battle mode — enemy HP scaled (tuned to 3× after
+      play-testing), larger sprite, "GYM LEADER BATTLE" label, 1.5× attack
+- [x] Boss win → "VICTORY! GYM BADGE EARNED!" end screen (the run's win condition);
+      boss loss (death or run) → return to overworld just south of the gym at 60% HP
+      (no dead-end refresh screen, no instant re-trigger)
+- [x] Smoke test `turn_based_rpg` clean
+- [x] **Deliverable:** manual run: fight encounters to level up → reach gym →
+      beat the gym leader → victory screen *(verified by user play-through)*
 
 ### Sprint 8B–8E Completion Items
 
 - [x] 8D: wanted-star escalation (police NPC spawn rate/damage scales per star),
       busted state when surrounded at 3+ stars (arrest instead of death)
-- [ ] 8E: gym/boss arena tile type in WFC tileset → final boss battle as win condition
+- [x] 8E: gym/boss arena tile type in WFC tileset → final boss battle as win condition
       (replaces "N encounters" counter)
 - [ ] 8C: boss enemy in final dungeon room (leverages shared systems from 8A)
 

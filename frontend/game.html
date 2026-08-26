@@ -2436,9 +2436,8 @@ class TurnOverworldScene extends Phaser.Scene {
     }
   }
 
-  _triggerBossBattle() {
-    const cfg = MANIFEST.game_config;
-    const bossMult = cfg.boss?.hp_mult || 5;
+  _triggerBossBattle() {    const cfg = MANIFEST.game_config;
+    const bossMult = 3;  // tuned: beatable on a fresh beeline (Sprint 8E feedback)
     const enemyHp = Math.floor((cfg.enemy?.base_hp || 60) * bossMult);
     this.scene.start('TurnBasedScene', {
       fromOverworld: true,
@@ -2718,7 +2717,7 @@ class TurnBasedScene extends Phaser.Scene {
   }
 
   _enemyTurn() {
-    const bossMult = this.isBoss ? (MANIFEST.game_config.boss?.attack_mult || 2) : 1;
+    const bossMult = this.isBoss ? 1.5 : 1;  // tuned (Sprint 8E feedback)
     const atkCfg = (MANIFEST.game_config.enemy?.base_attack || 15) * bossMult;
     const dmg = atkCfg + Phaser.Math.Between(-4, 4);
     this.playerHp -= dmg;
@@ -2748,18 +2747,7 @@ class TurnBasedScene extends Phaser.Scene {
         this._showEndScreen('VICTORY! GYM BADGE EARNED!', '#44ff44',
           totalScore + 1000, `BATTLES WON: ${this.encounters + 1}`);
       } else {
-        // Loss — return to overworld at the gym entrance to heal and retry
-        this.time.delayedCall(1200, () => {
-          this.scene.start('TurnOverworldScene', {
-            playerHp: Math.max(1, Math.floor(this.maxHp * 0.3)),
-            playerMp: this.playerMp,
-            overworldScore: totalScore,
-            encounters: this.encounters,
-            maxEncounters: this.maxEncounters,
-            returnX: this.returnX,
-            returnY: this.returnY,
-          });
-        });
+        this._returnFromBossLoss();
       }
       return;
     }
@@ -2798,6 +2786,22 @@ class TurnBasedScene extends Phaser.Scene {
     this.time.delayedCall(800, () => { this.busy = false; });
   }
 
+  // Boss loss → back to the overworld just south of the gym, partially healed
+  _returnFromBossLoss() {
+    const totalScore = this.overworldScore + this.score;
+    this.time.delayedCall(1400, () => {
+      this.scene.start('TurnOverworldScene', {
+        playerHp: Math.max(1, Math.floor(this.maxHp * 0.6)),
+        playerMp: this.playerMp,
+        overworldScore: totalScore,
+        encounters: this.encounters,
+        maxEncounters: this.maxEncounters,
+        returnX: this.returnX,
+        returnY: (this.returnY ?? 0) + 24,  // step off the gym tile — no instant re-trigger
+      });
+    });
+  }
+
   _victory() {
     this.busy = true;
     this.score += 1000;
@@ -2810,18 +2814,7 @@ class TurnBasedScene extends Phaser.Scene {
     // Boss loss — never a dead end: return to overworld to heal and retry (Sprint 8E)
     if (this.isBoss && this.fromOverworld) {
       this._log('Defeated by the gym leader...');
-      const totalScore = this.overworldScore + this.score;
-      this.time.delayedCall(1400, () => {
-        this.scene.start('TurnOverworldScene', {
-          playerHp: Math.max(1, Math.floor(this.maxHp * 0.3)),
-          playerMp: this.playerMp,
-          overworldScore: totalScore,
-          encounters: this.encounters,
-          maxEncounters: this.maxEncounters,
-          returnX: this.returnX,
-          returnY: this.returnY,
-        });
-      });
+      this._returnFromBossLoss();
       return;
     }
     if (this.fromOverworld) {
